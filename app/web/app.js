@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const labels = {passed: '双项通过', invalid: '校验未通过', error: '请求失败', queued: '排队中', running: '检测中', legacy: '历史单项'};
+const labels = {passed: '双项通过', invalid: '校验未通过', error: '执行异常', uncertain: '证据不足', queued: '排队中', running: '检测中', legacy: '历史单项'};
 const candyLabels = {passed:'糖果通过',invalid:'糖果未通过',error:'糖果请求失败',running:'糖果检测中',not_run:'未检测糖果'};
 const candyBadge = status => `<span class="badge ${escapeHTML(status)}">${candyLabels[status] || '未检测糖果'}</span>`;
 const escapeHTML = (value) => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -27,34 +27,35 @@ function qualityTag(tests = {}, corner = true) {
   if (tests.pelican?.review?.status === 'invalid') reasons.push('鹈鹕视觉审核未通过');
   if (tests.candy?.status === 'invalid') reasons.push('糖果答案未通过');
   if (!reasons.length) return '';
-  return `<span class="${corner ? 'quality-corner' : 'quality-flag'}" title="${reasons.join('；')}" aria-label="降智 · 自动删除：${reasons.join('；')}"><span>降智 · 自动删除</span></span>`;
+  return `<span class="${corner ? 'quality-corner' : 'quality-flag'}" title="${reasons.join('；')}" aria-label="内容校验未通过：${reasons.join('；')}"><span>内容校验未通过</span></span>`;
 }
 
 function reviewDetail(tests = {}) {
   const review = tests.pelican?.review;
   if (!review) return tests.pelican ? '<p class="field-note">本记录尚无视觉审核结果。</p>' : '';
-  const names = {pelican:'鹈鹕形态',bicycle:'自行车结构',riding:'脚与踏板接触',motion:'骑行动作'};
+  const names = {pelican:'鹈鹕形态',bicycle:'自行车结构',riding:'脚与踏板接触',motion:'骑行动作',scene:'场景',nonce_visible:'可见校验码',loop:'循环连续性'};
   const checks = Object.entries(review.checks || {}).map(([key,value]) => `${names[key] || key}：${value === true ? '通过' : value === false ? '未通过' : '无法判断'}`);
-  return `<div class="review-detail"><strong>视觉审核</strong><p>${escapeHTML(review.reason || '鹈鹕形态、自行车结构及骑行动作通过审核')}</p><p>${escapeHTML(checks.join(' · '))}</p></div>`;
+  return `<div class="review-detail"><strong>视觉审核${review.judge_mode === 'independent' ? ' · 独立裁判' : review.judge_mode === 'self' ? ' · 同模型自评' : ''}</strong><p>${escapeHTML(review.reason || (review.status === 'passed' ? '画面各项检查通过审核' : review.status === 'running' ? '截图已保存，正在审核' : '尚无最终结论'))}</p><p>${escapeHTML(checks.join(' · '))}</p>${review.stage ? `<p>失败阶段：${escapeHTML(review.stage)} · ${escapeHTML(review.error_code || '')}</p>` : ''}</div>`;
 }
 
 function testSummary(tests = {}, internal = true) {
   const names = {pelican:'鹈鹕',candy:'糖果'};
-  const statuses = {passed:'通过',invalid:'未通过',error:'请求失败',queued:'排队中',running:'检测中',not_run:'未检测'};
+  const statuses = {passed:'通过',invalid:'未通过',error:'执行异常',uncertain:'证据不足',queued:'排队中',running:'检测中',not_run:'未检测'};
   const review = tests.pelican?.review;
   const reviewLabels = {passed:'通过',invalid:'未通过',error:'异常',uncertain:'无法判断'};
-  return '<div class="test-results">' + Object.entries(tests).map(([name, result]) => `<span class="test-result ${escapeHTML(result.status)}">${names[name] || name} · ${statuses[result.status] || '未检测'}${result.attempts > 1 ? ` · 尝试 ${result.attempts} 次` : ''}</span>`).join('') + (internal && tests.pelican ? `<span class="test-result ${escapeHTML(review?.status || '')}">视觉审核 · ${reviewLabels[review?.status] || (tests.pelican.status === 'running' ? '待完成' : '未审核')}</span>` : '') + '</div>';
+  return '<div class="test-results">' + Object.entries(tests).map(([name, result]) => `<span class="test-result ${escapeHTML(result.status)}">${names[name] || name} · ${name === 'pelican' && !internal && result.status === 'passed' ? '基础校验通过 · 未视觉审核' : statuses[result.status] || '未检测'}${result.attempts > 1 ? ` · 尝试 ${result.attempts} 次` : ''}</span>`).join('') + (internal && tests.pelican ? `<span class="test-result ${escapeHTML(review?.status || '')}">视觉审核 · ${reviewLabels[review?.status] || (tests.pelican.status === 'running' ? '待完成' : '未审核')}</span>` : '') + '</div>';
 }
 function candyDetail(result, prompt) {
   if (!result) return '';
-  return `<details class="candy-detail"><summary>糖果题回答与判分</summary><p class="field-note">判分规则：回答中出现独立数字 21 即通过。</p><pre>${escapeHTML(result.output || result.error || (result.status === 'not_run' ? '旧记录未进行糖果测试' : '等待回答'))}</pre>${prompt ? `<details><summary>本轮糖果题原文</summary><pre>${escapeHTML(prompt)}</pre></details>` : ''}</details>`;
+  const rule = result.scoring_version >= 3 ? '规则 v3：最后一行的明确最终答案为 21；不按推理中出现的数字判分。' : '历史规则：回答中出现独立数字 21 即通过。';
+  return `<details class="candy-detail"><summary>糖果题回答与判分</summary><p class="field-note">${rule}</p><pre>${escapeHTML(result.output || result.error || (result.status === 'not_run' ? '旧记录未进行糖果测试' : '等待回答'))}</pre>${prompt ? `<details><summary>本轮糖果题原文</summary><pre>${escapeHTML(prompt)}</pre></details>` : ''}</details>`;
 }
 
 function renderState() {
   const s = state.stats, config = state.settings;
   $('rate').innerHTML = `${s.completed ? (s.passed / s.completed * 100).toFixed(1) : '—'}<small>%</small>`;
   $('rate-meter').style.width = `${s.completed ? s.passed / s.completed * 100 : 0}%`;
-  $('rate-note').textContent = s.completed ? `${s.passed} / ${s.completed} 次糖果题通过` : s.legacy ? `${s.legacy} 轮历史单项不计入通过率` : '等待第一份检测结果';
+  $('rate-note').textContent = s.completed ? `${s.passed} / ${s.completed} 次糖果题通过 · 规则 v3` : s.legacy ? `${s.legacy} 轮旧版结果不计入 v3 通过率` : '等待第一份检测结果';
   $('total').innerHTML = `${s.total}<small>次</small>`;
   $('errors').innerHTML = `${s.errors + s.invalid}<small>次</small>`;
   $('error-note').textContent = `校验未通过 ${s.invalid} · 请求失败 ${s.errors}`;
@@ -158,6 +159,29 @@ async function showDetail(id) {
         catch (error) { message(error.message, true); }
       });
     }
+    if (r.tests?.pelican?.review?.render?.frames) {
+      const render = r.tests.pelican.review.render;
+      const panel = document.createElement('details');
+      const summary = document.createElement('summary');
+      summary.textContent = '审核截图证据 · 点击查看时间与判分依据';
+      panel.append(summary);
+      const grid = document.createElement('div'); grid.className = 'evidence-grid';
+      for (const frame of render.frames) {
+        const figure = document.createElement('figure');
+        const img = document.createElement('img'); img.loading = 'lazy';
+        img.alt = `证据帧 ${frame.index}，${Number(frame.time).toFixed(3)} 秒`;
+        img.src = `/api/runs/${r.id}/frames/${frame.index}`;
+        img.addEventListener('error', () => { img.alt = '截图证据不可用或已过期'; });
+        const caption = document.createElement('figcaption'); caption.textContent = img.alt;
+        figure.append(img, caption); grid.append(figure);
+      }
+      panel.append(grid);
+      const explanation = document.createElement('pre');
+      explanation.textContent = JSON.stringify({evidence:r.tests.pelican.review.evidence,
+        renderer:render.renderer_version, browser:render.browser_version,
+        sampling_limited:render.sampling_limited}, null, 2);
+      panel.append(explanation); $('detail-body').append(panel);
+    }
     $('detail-body').insertAdjacentHTML('beforeend', (r.has_svg ? '' : qualityTag(r.tests, false)) + reviewDetail(r.tests));
   } catch (error) {
     if (sequence === detailSequence) { $('detail-title').textContent = '无法读取记录'; $('detail-body').textContent = error.message; }
@@ -176,6 +200,8 @@ async function refresh(page = galleryPage) {
     galleryPage = fresh.page; galleryPages = fresh.pages; galleryTotal = fresh.total;
     records = fresh.items;
     renderState(); renderGallery();
+    const v = state.visual_stats;
+    if (v) $('visual-stats').textContent = `当前节点 · 鹈鹕 ${v.total} 次 · 已生成 ${v.generated} · 审核完成 ${v.reviewed} · 通过 ${v.passed} · 内容不合格 ${v.invalid} · 证据不足 ${v.uncertain} · 执行异常 ${v.errors}`;
     $('connection').textContent = state.candy_running ? '糖果检测进行中' : state.settings.enabled ? '自动检测已启用' : '自动检测已暂停';
     $('connection').className = 'connection online';
   } catch (error) {

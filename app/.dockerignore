@@ -2,6 +2,9 @@
 !server.py
 !visual_review.py
 !render_frames.py
+!reliability.py
+!model_worker.py
+!artifacts.py
 !requirements.txt
 !web/
 !web/**
