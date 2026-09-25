@@ -3,6 +3,8 @@ services:
     build: ./app
     image: manxue-ai:local
     container_name: manxue-ai
+    # Reap Chromium descendants so repeated visual reviews cannot exhaust pids_limit.
+    init: true
     restart: unless-stopped
     ports:
       - "127.0.0.1:18765:8765"

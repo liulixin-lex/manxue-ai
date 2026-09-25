@@ -53,6 +53,10 @@ Remove-Item Env:ADMIN_TOKEN
 
 容器数据保存在 Compose 命名卷中，重建容器不会清空记录。`docker compose down -v` 会删除数据卷。
 
+Compose 已启用 `init: true`，用于回收视觉审核截图时 Chromium 遗留的子进程，避免僵尸进程累积耗尽容器的进程配额。自行使用 `docker run` 部署时，也需要传入 `--init`。
+
+从未启用此配置的旧版本升级时，等待当前检测结束，再运行 `docker compose up -d --build --force-recreate`。重建会清理已积累的僵尸进程并应用新配置；仅运行 `docker compose restart` 不会应用 `init` 设置。历史失败记录会保留，新检测将使用修复后的环境。
+
 `ADMIN_TOKEN` 仅用于首次初始化，之后不会覆盖已保存的密码。首次配置完成并清除该环境变量后，可执行 `docker compose up -d --force-recreate`，从容器配置中移除初始密码。
 
 对公网开放时，请在主机上配置 HTTPS 反向代理，转发至 `127.0.0.1:18765`。不要启用请求正文日志。
