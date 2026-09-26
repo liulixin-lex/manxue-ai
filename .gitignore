@@ -31,6 +31,12 @@
 !/app/web/admin.js
 !/app/web/privacy.js
 !/app/web/style.css
+!/app/web/observatory.css
+!/app/web/vendor/
+/app/web/vendor/*
+!/app/web/vendor/gsap.min.js
+!/app/web/vendor/GSAP-LICENSE.txt
+!/app/web/vendor/README.md
 !/app/web/favicon.svg
 
 # Runtime data, credentials, backups, and local tools are always private.

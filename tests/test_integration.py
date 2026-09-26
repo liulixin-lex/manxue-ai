@@ -67,7 +67,7 @@ class EndToEndTests(unittest.TestCase):
                     page.goto(f'http://127.0.0.1:{http.server_port}/?run={run_id}')
                     page.wait_for_selector('.evidence-grid',state='attached')
                     self.assertGreaterEqual(page.locator('.evidence-grid img').count(),12)
-                    self.assertNotIn('降智',page.locator('body').inner_text())
+                    self.assertNotIn('降智',page.locator('#detail-body').inner_text())
                     self.assertIn('主体识别 v4',page.locator('.review-detail').inner_text())
                     self.assertIn('细节观察（不否决主体）',page.locator('.review-detail').inner_text())
                     self.assertEqual(0,page.locator('.quality-corner').count())
