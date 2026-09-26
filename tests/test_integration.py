@@ -68,8 +68,9 @@ class EndToEndTests(unittest.TestCase):
                     page.wait_for_selector('.evidence-grid',state='attached')
                     self.assertGreaterEqual(page.locator('.evidence-grid img').count(),12)
                     self.assertNotIn('降智',page.locator('#detail-body').inner_text())
-                    self.assertIn('主体识别 v4',page.locator('.review-detail').inner_text())
-                    self.assertIn('细节观察（不否决主体）',page.locator('.review-detail').inner_text())
+                    self.assertIn('视觉审核',page.locator('.review-detail').inner_text())
+                    self.assertNotIn('v4',page.locator('.review-detail').inner_text())
+                    self.assertIn('细节观察：',page.locator('.review-detail').inner_text())
                     self.assertEqual(0,page.locator('.quality-corner').count())
                     for tests in ({'candy':{'status':'invalid'},'pelican':{'status':'passed'}},
                                   {'pelican':{'status':'invalid','review':{'status':'invalid','version':3}}},

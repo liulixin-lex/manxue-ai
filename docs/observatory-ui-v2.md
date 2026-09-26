@@ -55,3 +55,16 @@ The implementations and Chinese prompt text are original to this project. Refere
 ## Verification
 
 Tests in tests/test_result_views.py cover per-test SQL filters, pagination, legacy handling, independent statistics, prompt diversity, scene non-repetition and persisted prompts. The browser case checks RGB colors, square geometry, separated details, keyboard tabs, 320/390/768/1024/1440px overflow, reduced motion, interrupted transitions, request failure/recovery and operation with the animation library blocked. The prior end-to-end evidence test still covers real Chromium rendering, saved screenshots, review details and the admin route. Visual captures additionally inspect real public records at desktop/mobile sizes and both color schemes.
+
+
+## 2026-09-26 · Compact unified overview
+
+The public overview now places candy metrics and its three-row history above the pelican gallery. Guest testing keeps a separate view. The first six pelicans appear initially; “展示更多” adds six at a time and preserves existing image elements. Gallery refreshes fetch at most four pages concurrently.
+
+Candy results use clean 16 px solid squares inside 24 px touch targets, read down three rows then across in time order. The finite viewport keeps the newest completed results and drops the oldest when a new result arrives. The final gray slot represents the current candy request; while idle its accessible label says it is waiting for the next request (or paused). Empty outlined slots never count as results. Arrow keys navigate the grid; status remains available through accessible labels and details. Reduced-motion settings disable transitions.
+
+Public copy no longer includes scoring/review/prompt version badges, implementation descriptions, raw request JSON or renderer/browser metadata. Stored records and API evidence remain available. Existing prompt version markers are omitted from the display without editing stored history.
+
+Angular surfaces use offset soft shadows, tighter corners, hover/press feedback, a short status conveyor and progressive gallery transitions. The illustration itself stays untransformed for inspection. The shared admin stylesheet is unchanged.
+
+New prompts retain the pelican/bicycle/riding subject, moving near/far layers, automatic four-second seamless loop, fixed text nonce and safe standalone SVG output. Scene/style/action diversity is retained. Prompts are about 220–240 Chinese characters, with no version label. Review policy and candy scoring are unchanged.

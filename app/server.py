@@ -37,7 +37,7 @@ DEFAULTS = dict(base_url="https://api.example.com/v1", model="gpt-6-astra",
                 effort="medium", protocol="responses", api_key="", enabled=False, next_run=None,
                 interval_minutes=30, timeout_seconds=300, max_output_tokens=16000, guest_enabled=True, retry_count=2, review_timeout_seconds=240, review_effort="inherit", review_format="auto", judge_node_id=None)
 NODE_FIELDS = ("base_url", "api_key", "model", "effort", "protocol")
-# Prompt v2 varies appearance without changing the v4 subject-based review rubric.
+# Scene variation does not change the subject-based review rubric.
 SCENE_MOTION = {
     "海边木栈道": "近处栈道木纹、栏杆向后滚动，远处海浪和帆船缓慢漂移。",
     "秋日林道": "近处落叶和路边树干向后移动，远处金色树林慢速横移，少量叶片飘落。",
@@ -58,37 +58,32 @@ SCENE_MOTION = {
 }
 SCENES = tuple(SCENE_MOTION)
 PELICAN_STYLES = (
-    "清爽的平面矢量插画，有限色板，轮廓干净",
-    "柔和的童书插画，圆润形体，色块层次清楚",
-    "轻盈的线描加平涂，细节简洁，主体突出",
-    "剪纸感的分层色块，前后景层次明确，不使用复杂滤镜",
-    "复古旅行海报式配色，简洁构图，不添加宣传文字",
-    "明快的卡通插画，略带夸张的橙色长嘴，骑行动作自然",
+    "清爽矢量",
+    "柔和童书",
+    "线描平涂",
+    "分层剪纸",
+    "复古旅行海报",
+    "明快卡通",
 )
 PELICAN_ACTIONS = (
-    "轻快巡游，身体随踩踏略微上下起伏，翅膀稳定扶住车把",
-    "悠闲骑行，头部偶尔轻微转动，双脚保持连续踩踏",
-    "迎着微风骑行，短围巾轻轻摆动，主体和车架保持稳定",
-    "平稳前行，翅膀小幅调整平衡，不离开车座或踏板",
+    "轻快巡游，身体随踩踏微动",
+    "悠闲骑行，偶尔转头",
+    "迎风骑行，围巾轻摆",
+    "平稳前行，翅膀轻调平衡",
 )
-PROMPT = """创建一幅独立的 SVG 鹈鹕骑自行车 2D 循环动画。提示词版本：2。
-主角是一只可爱的鹈鹕：可辨识的橙色长嘴与喉囊，身体坐在车座上，双脚连续踩踏。
-自行车具有相连的车架、两只轮子、车把与踏板，车轮持续转动，脚与踏板动作协调。
-本次场景：{scene}。主体朝右，使用侧面跟拍构图；鹈鹕与自行车完整可见，占画面中央主要区域。
-背景必须实际运动，不能只有轮子在转或鹈鹕在原地抖动：把地面/前景和远景放在独立分组，向左连续平移。近景位移明显快于远景，形成视差，表现向右前进。
-动画从载入第一帧自动开始，不等待点击或悬停。使用 4 秒总循环；轮子/踏板可用 1 或 2 秒子循环，背景用 4 秒循环。用重复图案或相邻副本无缝接续，首尾不跳帧，不出现空白边缘。
-不要用整个 SVG 一起平移代替背景运动；校验码固定在屏幕坐标，天空底色可以静止，但路面与至少一层环境元素必须可见地移动。
-建议 viewBox 为 0 0 960 640，画面明朗，前景不可长期遮挡鸟和车。不要以静态速度线代替实际位移。
-在画面右下角用可见的 SVG text 元素显示本次校验码：{nonce}。
-只返回一个完整的 SVG，可使用内联 CSS 或 SMIL 动画；不要 HTML、JavaScript、外部图片、外部字体或其他外部资源。"""
+PROMPT = """生成鹈鹕骑自行车的 SVG 循环动画，场景：{scene}。
+橙色长嘴、喉囊清晰，鸟和车完整居中；坐在车座上连续踩踏，车轮同步转动。
+侧面跟拍，路面与远景向左移动，近快远慢；重复铺排，4 秒无缝自动循环。
+右下角固定显示文本校验码：{nonce}。只输出完整 SVG，可用 CSS/SMIL，不用 JavaScript 或外部资源。"""
 
 
 def build_pelican_prompt(scene, nonce):
     """Persist the exact sampled prompt so any run can be inspected later."""
-    environment = SCENE_MOTION.get(scene, "近处路面持续向后滚动，远处环境以更慢速度横移。")
+    environment = SCENE_MOTION.get(scene, "近处路面后移，远景慢速横移。")
     style = secrets.choice(PELICAN_STYLES)
     action = secrets.choice(PELICAN_ACTIONS)
-    return PROMPT.format(scene=scene, nonce=nonce) + f"\n本轮环境运动：{environment}\n本轮视觉风格：{style}。\n本轮骑行动作：{action}。优先保证主体完整和运动连续，不必堆叠细节。"
+    return PROMPT.format(scene=scene, nonce=nonce) + f"\n环境：{environment}\n画风：{style}。动作：{action}。"
+
 
 
 CANDY_PROMPT = """在一个黑色的袋子里放有三种口味的糖果，每种糖果有两种不同的形状（圆形和五角星形，不同的形状靠手感可以分辨）。现已知不同口味的糖和不同形状的数量统计如下表。参赛者需要在活动前决定摸出的糖果数目，那么，最少取出多少个糖果才能保证手中同时拥有不同形状的苹果味和桃子味的糖？（同时手中有圆形苹果味匹配五角星桃子味糖果，或者有圆形桃子味匹配五角星苹果味糖果都满足要求）
