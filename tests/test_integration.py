@@ -65,22 +65,15 @@ class EndToEndTests(unittest.TestCase):
                     page=browser.new_page()
                     page.on('pageerror',lambda error:errors.append(str(error)))
                     page.goto(f'http://127.0.0.1:{http.server_port}/?run={run_id}')
-                    page.wait_for_selector('.evidence-grid',state='attached')
-                    self.assertGreaterEqual(page.locator('.evidence-grid img').count(),12)
+                    page.wait_for_selector('#detail-image')
+                    page.wait_for_function('()=>document.getElementById("detail-image").naturalWidth>0')
+                    self.assertEqual(0,page.locator('.evidence-grid, .review-detail, .quality-corner, .quality-flag').count())
                     self.assertNotIn('降智',page.locator('#detail-body').inner_text())
-                    self.assertIn('视觉审核',page.locator('.review-detail').inner_text())
-                    self.assertNotIn('v4',page.locator('.review-detail').inner_text())
-                    self.assertIn('细节观察：',page.locator('.review-detail').inner_text())
-                    self.assertEqual(0,page.locator('.quality-corner').count())
-                    for tests in ({'candy':{'status':'invalid'},'pelican':{'status':'passed'}},
-                                  {'pelican':{'status':'invalid','review':{'status':'invalid','version':3}}},
-                                  {'pelican':{'review':{'status':'uncertain','version':4}}}):
-                        self.assertEqual('',page.evaluate('tests => qualityTag(tests)',tests))
-                    confirmed={'pelican':{'review':{'status':'invalid','version':4,
-                               'confirmed_failures':['pelican'],'reason':'主体不符'}}}
-                    self.assertIn('AI 复核：主体不符',page.evaluate('tests => qualityTag(tests)',confirmed))
+                    self.assertNotRegex(page.locator('#detail-body').inner_text(),r'视觉审核|细节观察|审核截图|结构质量复核|主体通过')
+                    self.assertIn('鹈鹕通过',page.locator('#detail-body').inner_text())
+                    self.assertTrue(page.locator('#download-svg').is_visible())
                     page.set_viewport_size({'width':390,'height':844})
-                    self.assertTrue(page.locator('.review-detail').is_visible())
+                    self.assertTrue(page.locator('#detail-image').is_visible())
                     self.assertTrue(page.evaluate('document.documentElement.scrollWidth <= innerWidth'))
                     page.goto(f'http://127.0.0.1:{http.server_port}/admin')
                     page.wait_for_selector('#auth-dialog[open]')
