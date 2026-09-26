@@ -204,6 +204,12 @@ function testDuration(run, kind) {
   return test?.finished ? `${Math.max(0,test.finished-(test.started || run.started)).toFixed(1)} 秒` : ['running','queued'].includes(test?.status) ? '检测中' : '未记录耗时';
 }
 
+function tokenUsage(result = {}) {
+  const usage=result.generation_usage || {};
+  const count=key=>Number.isSafeInteger(usage[key]) && usage[key]>=0 ? usage[key].toLocaleString('en-US') : '—';
+  return `<p class="token-usage" aria-label="鹈鹕生成 token 用量"><span>输入 token <b>${count('input_tokens')}</b></span><span>输出 token <b>${count('output_tokens')}</b></span></p>`;
+}
+
 function imageURL(id) { return `/api/runs/${id}/svg`; }
 
 async function attachImage(img, id) {
@@ -230,6 +236,7 @@ function renderGallery(animateNew = false) {
       const pelican=r.tests?.pelican || {status:'not_run'},status=pelican.status;
       card.innerHTML=`<button class="preview" data-run="${r.id}" aria-label="${escapeHTML(date(r.started)+' '+r.scene)}，查看详情">${r.has_svg ? `<img data-image="${r.id}" alt="${escapeHTML(r.scene)} · 鹈鹕骑行" loading="lazy">` : `<span class="no-preview ${escapeHTML(status)}">${status==='running' ? '正在创作' : '暂未生成画面'}</span>`}<span class="overlay">查看作品 ↗</span></button><div class="card-body"><div class="card-top"><time>${date(r.started)}</time>${badge(status)}</div><h3>${escapeHTML(r.scene)}</h3><p class="card-model">${escapeHTML(r.model)} / ${escapeHTML(r.effort)}</p><p>${escapeHTML(r.node_name || '历史节点')} · ${testDuration(r,'pelican')}</p></div>`;
       const button=card.querySelector('[data-run]');button.addEventListener('click',()=>showDetail(r.id,'pelican'));
+      card.querySelector('.card-body').insertAdjacentHTML('beforeend',tokenUsage(pelican));
       if(r.has_svg) attachImage(card.querySelector('[data-image]'),r.id);
     }
     desired.push(card);
@@ -261,6 +268,7 @@ async function showDetail(id, kind = 'pelican') {
     const pelican=r.tests?.pelican || {status:'not_run'};
     $('detail-title').textContent = `鹈鹕 · ${r.scene} · ${date(r.started)}`;
     $('detail-body').innerHTML = `${r.has_svg ? '<img class="detail-image" id="detail-image" alt="模型生成的鹈鹕骑行 SVG 动画">' : ''}<div class="detail-meta">${badge(pelican.status)}<span>节点：${escapeHTML(r.node_name || '历史节点')}</span><span>${escapeHTML(r.model)} / ${escapeHTML(r.effort)}</span><span>${r.protocol === 'responses' ? 'Responses' : 'Chat Completions'}</span><span>${testDuration(r,'pelican')}</span><span>${r.source === 'manual' ? '手动检测' : '定时检测'} #${r.id}</span></div><div class="check-grid" ${pelican.evaluation_level === 'display' ? 'hidden' : ''}>${[['svg','SVG 格式'],['animation','动画声明'],['nonce','校验码']].map(([key,label]) => `<span class="${r.checks[key] ? '' : 'fail'}">${r.checks[key] ? '✓' : '—'} ${label}</span>`).join('')}<span>本轮校验码：${escapeHTML(r.nonce)}</span></div>${pelican.error ? `<p class="detail-error">${escapeHTML(pelican.error)}</p>` : ''}${testSummary({pelican})}<details><summary>本轮完整提示词</summary><pre>${escapeHTML((r.prompt || '').replace(/提示词版本[：:]\s*\d+[。.]?\s*/g,''))}</pre></details><details><summary>原始输出</summary><pre>${escapeHTML(pelican.output || r.output || '尚无输出')}</pre></details>${r.has_svg ? '<button class="button secondary" id="download-svg">下载 SVG 动画 ↓</button>' : ''}`;
+    $('detail-body').querySelector('.detail-meta').insertAdjacentHTML('afterend',tokenUsage(pelican));
     if (r.has_svg) {
       attachImage($('detail-image'), id);
       $('download-svg').addEventListener('click', async () => {
@@ -359,6 +367,7 @@ function addGuestPelican(result) {
   const pelican=result.tests.pelican;
   const card=document.createElement('article');card.className='guest-result';
   card.innerHTML=`<div class="guest-result-head"><strong>访客鹈鹕</strong>${badge(pelican.status)}</div>${testSummary({pelican},false)}<p>${date(result.submitted || result.started)} · ${escapeHTML(result.model)} · ${escapeHTML(result.effort)}</p><p>API：${escapeHTML(result.api_masked || '未记录')}</p><p>${escapeHTML(result.scene)} · 校验码${result.checks.nonce ? '一致' : ['queued','running'].includes(pelican.status) ? '待检测' : '未通过'}</p>${pelican.error ? `<p class="guest-error">${escapeHTML(pelican.error)}</p>` : ''}${result.has_svg ? '<button class="guest-preview" aria-label="放大访客鹈鹕动画"><img alt="访客测试生成的鹈鹕动画"></button><a class="guest-download" download="guest-pelican.svg">下载 SVG ↓</a>' : ''}`;
+  card.querySelector('.guest-result-head').insertAdjacentHTML('afterend',tokenUsage(pelican));
   if (result.has_svg) {
     const url=`/api/guest/results/${result.id}/svg`;
     card.querySelector('img').src=url+'?display=1';card.querySelector('a').href=url;
@@ -366,6 +375,7 @@ function addGuestPelican(result) {
       detailSequence++;
       $('detail-title').textContent=`访客鹈鹕 · ${result.scene}`;
       $('detail-body').innerHTML=`<div class="review-image"><img class="detail-image" alt="访客测试生成的鹈鹕动画"></div>${testSummary({pelican},false)}<p class="field-note">API：${escapeHTML(result.api_masked || '未记录')}</p>`;
+      $('detail-body').querySelector('.review-image').insertAdjacentHTML('afterend',tokenUsage(pelican));
       $('detail-body').querySelector('img').src=url+'?display=1';
       if (!$('detail-dialog').open) { $('detail-dialog').showModal(); reveal($('detail-dialog')); }
     });

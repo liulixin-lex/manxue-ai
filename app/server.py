@@ -670,6 +670,47 @@ def inspect_svg(output, nonce):
     return svg, checks, "；".join(missing)
 
 
+def token_counts(usage):
+    if not isinstance(usage, dict):
+        return {}
+    counts = {}
+    for field, alias in (('input_tokens', 'prompt_tokens'), ('output_tokens', 'completion_tokens')):
+        for key in (field, alias):
+            value = usage.get(key)
+            if type(value) is int and 0 <= value <= 9007199254740991:
+                counts[field] = value
+                break
+    return counts
+
+
+def generation_token_counts(test):
+    if 'generation_usage' in test:
+        return token_counts(test['generation_usage'])
+    # Older results include review usage in the test total. Subtract matching
+    # raw fields before normalizing aliases, since the two protocols may differ.
+    usage = test.get('usage')
+    if not isinstance(usage, dict):
+        return {}
+    remaining = dict(usage)
+    review = test.get('review')
+    for _ in range(10):
+        if not isinstance(review, dict):
+            break
+        if isinstance(review.get('usage'), dict):
+            for key, value in review['usage'].items():
+                total = remaining.get(key)
+                if type(value) is int and value >= 0 and type(total) is int:
+                    if total > value:
+                        remaining[key] = total - value
+                    else:
+                        # A review-only field cannot establish reported zero
+                        # generation usage; leave it unknown in legacy records.
+                        remaining.pop(key, None)
+            break
+        review = review.get('previous_review')
+    return token_counts(remaining)
+
+
 def perform_test(config, prompt, nonce, model_call, kind="pelican", on_progress=None):
     started = time.time()
     attempts_log = []
@@ -686,7 +727,7 @@ def perform_test(config, prompt, nonce, model_call, kind="pelican", on_progress=
         return dict(status=status, started=started, finished=None if status=='running' else time.time(),
             attempts=len(attempts_log), attempts_log=list(attempts_log), output=output, svg=svg,
             checks=checks, error=redact(redact(message,config),config.get('_judge',{}))[:1000], error_code=error_code,
-            stage=current_stage or stage, usage=safe_usage, returned_model=redact(returned_model,config)[:200],
+            stage=current_stage or stage, usage=safe_usage, generation_usage=token_counts(usage), returned_model=redact(returned_model,config)[:200],
             review=review, evaluation_level='display' if display_only else 'basic' if config.get('_guest') else 'visual', scoring_version=3)
     def evidence_progress(metadata):
         nonlocal review
@@ -1391,7 +1432,7 @@ class Monitor:
             published.update({key: result[key] for key in ("status", "finished", "checks", "svg")})
             # Explicit public whitelist: no full address, key, raw upstream error or visual review.
             for name, test in result["tests"].items():
-                public_test = {key: test[key] for key in ("status", "checks", "started", "finished", "attempts", "scoring_version", "evaluation_level") if key in test}
+                public_test = {key: test[key] for key in ("status", "checks", "started", "finished", "attempts", "scoring_version", "evaluation_level", "generation_usage") if key in test}
                 if name == "candy":
                     public_test["output"] = test.get("output", "")
                 if test.get("error"):
@@ -1498,6 +1539,7 @@ class Monitor:
             result["tests"] = {"pelican": {"status": result["status"]}, "candy": {"status": "not_run"}}
             result["status"] = "legacy"
         for test in result["tests"].values():
+            test['generation_usage'] = generation_token_counts(test)
             for key in ("output", "error", "returned_model"):
                 if key in test:
                     test[key] = redact(test[key], config)

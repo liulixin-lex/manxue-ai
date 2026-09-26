@@ -36,3 +36,9 @@ dialog{border:0;border-radius:4px;padding:0;width:min(900px,calc(100% - 32px));m
 
 /* Display-only results carry no quality verdict. */
 .badge.displayed,.test-result.displayed{background:#e9eef0;color:#405862}
+
+.token-usage{display:flex;flex-wrap:wrap;gap:6px 18px;margin:10px 0;font-size:12px;color:var(--muted)}
+.token-usage>span{display:inline-flex;align-items:baseline;gap:6px}
+.token-usage b{font-weight:500;color:var(--body);font-variant-numeric:tabular-nums}
+.card-body .token-usage{margin:12px 0 0}
+.detail-meta+.token-usage{margin:-6px 0 18px}
