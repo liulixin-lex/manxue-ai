@@ -76,6 +76,10 @@ function qualityTag(tests = {}, corner = true) {
 function reviewDetail(tests = {}) {
   const review = tests.pelican?.review;
   if (!review) return tests.pelican ? '<p class="field-note">本记录尚无视觉审核结果。</p>' : '';
+  if (review.manual_override?.status === 'passed') {
+    const previous=review.previous_review;
+    return '<div class="review-detail"><strong>已手动标记通过</strong>' + (previous ? '<details><summary>原审核记录</summary><p>'+escapeHTML(previous.reason || '原审核结论已保留')+'</p></details>' : '') + '</div>';
+  }
   const names = {pelican:'鹈鹕形态',bicycle:'自行车主体',riding:'骑乘构图',motion:'骑行动作',scene:'场景',nonce_visible:'可见校验码',loop:'循环连续性'};
   const v4 = review.version >= 4;
   const core = ['pelican','bicycle','riding'];
@@ -92,7 +96,7 @@ function testSummary(tests = {}, internal = true) {
   const names = {pelican:'鹈鹕',candy:'糖果'};
   const statuses = {passed:'通过',invalid:'未通过',error:'执行异常',uncertain:'证据不足',queued:'排队中',running:'检测中',not_run:'未检测'};
   const review = tests.pelican?.review;
-  const reviewLabels = {passed:review?.quality_gate?.status === 'passed' ? '主体与结构通过' : '主体通过',invalid:review?.quality_failures?.length ? '结构质量未通过' : '主体不符',error:'执行异常',uncertain:'待复核'};
+  const reviewLabels = {passed:review?.manual_override?.status === 'passed' ? '手动通过' : review?.quality_gate?.status === 'passed' ? '主体与结构通过' : '主体通过',invalid:review?.quality_failures?.length ? '结构质量未通过' : '主体不符',error:'执行异常',uncertain:'待复核'};
   return '<div class="test-results">' + Object.entries(tests).map(([name, result]) => `<span class="test-result ${escapeHTML(result.status)}">${names[name] || name} · ${name === 'pelican' && !internal && result.status === 'passed' ? '基础校验通过 · 未视觉审核' : statuses[result.status] || '未检测'}${result.attempts > 1 ? ` · 尝试 ${result.attempts} 次` : ''}</span>`).join('') + (internal && tests.pelican ? `<span class="test-result ${escapeHTML(review?.status || '')}">视觉审核 · ${reviewLabels[review?.status] || (tests.pelican.status === 'running' ? '待完成' : '未审核')}</span>` : '') + '</div>';
 }
 function candyDetail(result, prompt, open = false) {
@@ -232,7 +236,7 @@ function testDuration(run, kind) {
 function imageURL(id) { return `/api/runs/${id}/svg`; }
 
 async function attachImage(img, id) {
-  try { img.addEventListener('error',()=>{img.alt='动画暂时无法加载，请刷新重试';},{once:true}); img.src = await imageURL(id); }
+  try { img.addEventListener('error',()=>{img.alt='动画暂时无法加载，请刷新重试';},{once:true}); img.src = imageURL(id)+'?display=1'; }
   catch { img.alt = '动画加载失败，请刷新重试'; }
 }
 
@@ -411,12 +415,12 @@ function addGuestPelican(result) {
   card.innerHTML=`<div class="guest-result-head"><strong>访客鹈鹕</strong>${badge(pelican.status)}</div>${testSummary({pelican},false)}<p>${date(result.submitted || result.started)} · ${escapeHTML(result.model)} · ${escapeHTML(result.effort)}</p><p>API：${escapeHTML(result.api_masked || '未记录')}</p><p>${escapeHTML(result.scene)} · 校验码${result.checks.nonce ? '一致' : ['queued','running'].includes(pelican.status) ? '待检测' : '未通过'}</p>${pelican.error ? `<p class="guest-error">${escapeHTML(pelican.error)}</p>` : ''}${result.has_svg ? '<button class="guest-preview" aria-label="放大访客鹈鹕动画"><img alt="访客测试生成的鹈鹕动画"></button><a class="guest-download" download="guest-pelican.svg">下载 SVG ↓</a>' : ''}`;
   if (result.has_svg) {
     const url=`/api/guest/results/${result.id}/svg`;
-    card.querySelector('img').src=url;card.querySelector('a').href=url;
+    card.querySelector('img').src=url+'?display=1';card.querySelector('a').href=url;
     card.querySelector('.guest-preview').addEventListener('click',() => {
       detailSequence++;
       $('detail-title').textContent=`访客鹈鹕 · ${result.scene}`;
       $('detail-body').innerHTML=`<div class="review-image"><img class="detail-image" alt="访客测试生成的鹈鹕动画"></div>${testSummary({pelican},false)}<p class="field-note">API：${escapeHTML(result.api_masked || '未记录')}</p>`;
-      $('detail-body').querySelector('img').src=url;
+      $('detail-body').querySelector('img').src=url+'?display=1';
       if (!$('detail-dialog').open) { $('detail-dialog').showModal(); reveal($('detail-dialog')); }
     });
   }

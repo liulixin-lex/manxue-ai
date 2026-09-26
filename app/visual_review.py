@@ -198,6 +198,8 @@ def verified_loop_boundary(metadata):
 
 def reassess_legacy_review(review):
     """Reclassify retained observations transparently; never claim a fresh model review."""
+    if isinstance(review,dict) and (review.get('manual_override') or {}).get('status')=='passed':
+        return None
     if (not isinstance(review,dict) or review.get('version',0) >= REVIEW_VERSION
             or review.get('status') not in ('passed','invalid','uncertain')):
         return None

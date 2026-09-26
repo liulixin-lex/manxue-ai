@@ -7,6 +7,7 @@
 !artifacts.py
 !replay_review.py
 !provider_probe.py
+!svg_display.py
 !requirements.txt
 !web/
 !web/**

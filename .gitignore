@@ -21,6 +21,7 @@
 !/app/artifacts.py
 !/app/replay_review.py
 !/app/provider_probe.py
+!/app/svg_display.py
 !/app/Dockerfile
 !/app/.dockerignore
 !/app/requirements.txt

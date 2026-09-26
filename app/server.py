@@ -27,6 +27,7 @@ import xml.etree.ElementTree as ET
 from visual_review import review_pelican, parse_review, reassess_legacy_review, REVIEW_VERSION
 from reliability import StageError, diagnose, event, remaining, request_with_retries
 from artifacts import save_evidence, prune_evidence, atomic_write
+from svg_display import display_svg
 
 ROOT = Path(__file__).resolve().parent
 INTERVAL = 30 * 60
@@ -76,6 +77,7 @@ PELICAN_ACTIONS = (
 )
 PROMPT = """生成鹈鹕骑自行车的 SVG 循环动画，场景：{scene}。
 橙色长嘴、喉囊清晰，鸟和车完整居中；坐在车座上连续踩踏，车轮同步转动。
+画幅3:2，背景铺满四边，无留白、边框和圆角。
 侧面跟拍，路面与远景向左移动，近快远慢；重复铺排，4 秒无缝自动循环。
 右下角固定显示文本校验码：{nonce}。只输出完整 SVG，可用 CSS/SMIL，不用 JavaScript 或外部资源。"""
 
@@ -1608,6 +1610,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not guest_match[2]:
                         return self.send(monitor.guest_view(result))
                     if svg := result.get("svg"):
+                        if parse.parse_qs(url.query).get('display')==['1']:svg=display_svg(svg)
                         return self.send(svg.encode(),"image/svg+xml; charset=utf-8",svg=True)
                 return self.send({"error":"结果已过期或不存在"},status=404)
             if url.path.startswith("/api/admin/"):
@@ -1638,7 +1641,9 @@ class Handler(BaseHTTPRequestHandler):
                     row = db.execute("SELECT * FROM runs WHERE id=?", (int(match[1]),)).fetchone()
                 if row:
                     if match[2] and row["svg"]:
-                        return self.send(redact(row["svg"], {"base_url":row["base_url"]}).encode(), "image/svg+xml; charset=utf-8", svg=True)
+                        svg=redact(row["svg"], {"base_url":row["base_url"]})
+                        if parse.parse_qs(url.query).get('display')==['1']:svg=display_svg(svg)
+                        return self.send(svg.encode(), "image/svg+xml; charset=utf-8", svg=True)
                     if not match[2]:
                         return self.send(monitor.serialize(row, detail=True))
             return self.send({"error": "未找到记录"}, status=404)

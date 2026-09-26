@@ -216,6 +216,12 @@ class LoopBoundaryTests(unittest.TestCase):
 
 
 class PolicyMigrationTests(unittest.TestCase):
+    def test_explicit_manual_pass_survives_policy_migration(self):
+        review=dict(verdict(),version=4,status='passed',manual_override={'status':'passed','source':'user_request'})
+        original=copy.deepcopy(review)
+        self.assertIsNone(vr.reassess_legacy_review(review))
+        self.assertEqual(original,review)
+
     def legacy(self,**changes):
         return dict(verdict(**changes),version=3,status='invalid',reason='旧标准：循环未通过',
                     render={'frames':[{'index':i} for i in range(12)]},receipts=[{'sha256':'retained'}])

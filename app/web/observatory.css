@@ -27,3 +27,9 @@ dialog{border:0;border-radius:4px;padding:0;width:min(900px,calc(100% - 32px));m
 @media(max-width:1024px){.topbar.has-promotion{grid-template-columns:1fr 1fr;gap:14px;padding-block:16px}.topbar.has-promotion .brand{grid-column:1;grid-row:1}.topbar.has-promotion .connection{grid-column:2;grid-row:1}.promotion{grid-row:2;grid-column:1/-1;width:min(100%,620px);justify-self:center}}
 @media(max-width:520px){.promotion{gap:12px;padding:12px 14px}.brand{font-size:18px}.promotion-cta{max-width:36%;font-size:11px}.topbar.has-promotion{gap:12px}.promotion-copy strong{font-size:13px}}
 @media(prefers-reduced-motion:reduce){.promotion,.promotion-cta svg{transition:none}.promotion:hover,.promotion:active,.promotion:hover .promotion-cta svg{transform:none}}
+
+/* Artwork reaches every edge; the expanded view keeps the complete composition. */
+.run-card,.preview,.guest-result,.guest-preview,.detail-image,.review-image{border-radius:0}
+.preview{border-bottom:0}
+.preview img,.guest-preview img{object-fit:cover}
+.detail-image{height:auto;max-height:none}
