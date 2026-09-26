@@ -17,7 +17,9 @@
           <div class="form-row"><div><label for="timeout">后台请求超时 / 秒</label><input id="timeout" type="number" min="10" max="600" step="1" required></div><div><label for="max-tokens">后台输出 Token 上限</label><input id="max-tokens" type="number" min="1024" max="64000" step="1" required></div></div>
           <label for="retry-count">后台失败重试次数</label><input id="retry-count" type="number" min="0" max="5" step="1" required><p class="field-note">默认重试 2 次，最多请求 3 次；仅重试临时请求故障，所有尝试共用本项超时预算。</p>
           <label for="judge-node">视觉审核节点</label><select id="judge-node"><option value="">使用生成节点（同模型自评）</option></select><p class="field-note">可选择独立的图片理解模型。审核结论会保留裁判配置与截图证据。</p>
-          <label for="review-timeout">审核请求总预算 / 秒</label><input id="review-timeout" type="number" min="10" max="300" step="1" required><p class="field-note">生成与审核分别有限重试；截图预算 45 秒。整轮预算为生成、截图与审核预算之和。</p>
+          <label for="review-effort">审核思考强度</label><select id="review-effort"><option value="inherit">沿用审核节点设置</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="xhigh">极高</option></select>
+          <label for="review-format">审核输出协议</label><select id="review-format"><option value="auto">优先结构化输出，兼容不支持的接口</option><option value="json_schema">严格结构化输出</option><option value="prompt">提示词 JSON（兼容模式）</option></select>
+          <label for="review-timeout">审核请求总预算 / 秒</label><input id="review-timeout" type="number" min="10" max="300" step="1" required><p class="field-note">建议审核总预算 240 秒；单次最多 120 秒，预算不足 60 秒不发起重试。截图预算 45 秒。整轮预算为三阶段预算之和。</p>
           <label class="toggle-row" for="admin-enabled"><span><b>启用后台自动检测</b><small>暂停后仍可由管理员单次检测</small></span><input type="checkbox" id="admin-enabled" role="switch"><span class="switch" aria-hidden="true"></span></label>
           <label class="toggle-row" for="guest-enabled"><span><b>开放访客独立测试</b><small>使用访客当次提交的接口和密钥</small></span><input type="checkbox" id="guest-enabled" role="switch"><span class="switch" aria-hidden="true"></span></label>
           <div class="admin-next"><span>下次后台检测</span><strong id="admin-next">尚未启用</strong><small>北京时间 UTC+8</small></div></div>

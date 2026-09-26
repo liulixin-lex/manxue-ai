@@ -19,7 +19,9 @@ function showConfig(data) {
   config = data;
   $('interval').value = config.interval_minutes;
   $('timeout').value = config.timeout_seconds;
-  $('review-timeout').value = config.review_timeout_seconds || 120;
+  $('review-effort').value = config.review_effort || 'inherit';
+  $('review-format').value = config.review_format || 'auto';
+  $('review-timeout').value = config.review_timeout_seconds || 240;
   $('judge-node').value = config.judge_node_id || '';
   $('retry-count').value = config.retry_count;
   $('max-tokens').value = config.max_output_tokens;
@@ -127,7 +129,7 @@ $('admin-form').addEventListener('submit', event => {
   event.preventDefault();
   if (!$('admin-form').reportValidity()) return;
   action(async () => {
-    const values = {judge_node_id:$('judge-node').value ? Number($('judge-node').value) : null,review_timeout_seconds:Number($('review-timeout').value),retry_count:Number($('retry-count').value),interval_minutes:Number($('interval').value), timeout_seconds:Number($('timeout').value), max_output_tokens:Number($('max-tokens').value), enabled:$('admin-enabled').checked, guest_enabled:$('guest-enabled').checked};
+    const values = {review_effort:$('review-effort').value,review_format:$('review-format').value,judge_node_id:$('judge-node').value ? Number($('judge-node').value) : null,review_timeout_seconds:Number($('review-timeout').value),retry_count:Number($('retry-count').value),interval_minutes:Number($('interval').value), timeout_seconds:Number($('timeout').value), max_output_tokens:Number($('max-tokens').value), enabled:$('admin-enabled').checked, guest_enabled:$('guest-enabled').checked};
     const result = await api('/api/admin/settings',values);
     showConfig(result);
     message('配置已保存并生效。后续检测使用新配置，无需重启。');

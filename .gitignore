@@ -19,6 +19,7 @@
 !/app/reliability.py
 !/app/model_worker.py
 !/app/artifacts.py
+!/app/replay_review.py
 !/app/Dockerfile
 !/app/.dockerignore
 !/app/requirements.txt

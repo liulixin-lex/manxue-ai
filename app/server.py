@@ -24,9 +24,9 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib import error, parse, request
 import xml.etree.ElementTree as ET
-from visual_review import review_pelican
+from visual_review import review_pelican, parse_review
 from reliability import StageError, diagnose, event, remaining, request_with_retries
-from artifacts import save_evidence, prune_evidence
+from artifacts import save_evidence, prune_evidence, atomic_write
 
 ROOT = Path(__file__).resolve().parent
 INTERVAL = 30 * 60
@@ -35,7 +35,7 @@ MAX_RESPONSE = 2 * 1024 * 1024
 MAX_STREAM_RESPONSE = 16 * 1024 * 1024
 DEFAULTS = dict(base_url="https://api.example.com/v1", model="gpt-6-astra",
                 effort="medium", protocol="responses", api_key="", enabled=False, next_run=None,
-                interval_minutes=30, timeout_seconds=300, max_output_tokens=16000, guest_enabled=True, retry_count=2, review_timeout_seconds=120, judge_node_id=None)
+                interval_minutes=30, timeout_seconds=300, max_output_tokens=16000, guest_enabled=True, retry_count=2, review_timeout_seconds=240, review_effort="inherit", review_format="auto", judge_node_id=None)
 NODE_FIELDS = ("base_url", "api_key", "model", "effort", "protocol")
 SCENES = ("海边木栈道", "秋日林道", "春日草坡", "雨后湿地", "黄昏公路", "湖畔风车", "热带海岛", "雪山谷地")
 PROMPT = """创建一幅独立的 SVG 鹈鹕骑自行车 2D 循环动画。
@@ -130,6 +130,11 @@ def validate_settings(values, old):
             if type(values[key]) is not int or not low <= values[key] <= high:
                 raise ValueError(f"{key} 必须为 {low}–{high} 的整数")
             new[key] = values[key]
+    for key, choices in (('review_effort',('inherit','low','medium','high','xhigh')), ('review_format',('auto','prompt','json_schema'))):
+        if key in values:
+            if values[key] not in choices:
+                raise ValueError('审核强度或输出格式不正确')
+            new[key] = values[key]
     if "judge_node_id" in values:
         node_id = values["judge_node_id"]
         if node_id is not None and (type(node_id) is not int or node_id <= 0):
@@ -155,17 +160,29 @@ def public_addresses(url):
     return parsed, ips
 
 
-def read_response(response, sock, deadline, limit, streaming=False):
+def read_response(response, sock, deadline, limit, streaming=False, review_frames=0):
     chunks, size = [], 0
     pending = b''
     stream_mode = None
+    state = {'items':{}, 'started':set(), 'model':'未返回','frame_count':review_frames} if review_frames else None
+    def recover():
+        return recover_review_stream(state,review_frames) if state else None
     while size <= limit and not response.isclosed():
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            recovered = recover()
+            if recovered is not None:
+                return recovered
             raise TimeoutError()
-        # No-progress timeout is separate from the total request deadline.
-        sock.settimeout(min(remaining, 90))
-        chunk = response.read1(min(65536, limit + 1 - size))
+        # A completed review message may survive a gateway dropping the final event.
+        sock.settimeout(min(remaining, 5 if recover() is not None else 90))
+        try:
+            chunk = response.read1(min(65536, limit + 1 - size))
+        except (TimeoutError, ConnectionError, http.client.IncompleteRead):
+            recovered = recover()
+            if recovered is not None:
+                return recovered
+            raise
         if not chunk:
             break
         size += len(chunk)
@@ -186,22 +203,46 @@ def read_response(response, sock, deadline, limit, streaming=False):
         if stream_mode is True:
             while match := re.search(rb'\r\n\r\n|\n\n|\r\r',pending):
                 block,pending = pending[:match.start()],pending[match.end():]
-                complete = stream_event(block)
+                complete = stream_event(block,state)
                 if complete is not None:
                     return complete
         if len(pending) > MAX_RESPONSE:
             raise StageError('request','response_limit','上游单个事件或 JSON 超过大小限制')
     if streaming:
         if stream_mode:
-            complete = stream_event(pending)
+            complete = stream_event(pending,state)
             if complete is not None:
                 return complete
+            recovered = recover()
+            if recovered is not None:
+                return recovered
             raise StageError('request','stream_incomplete','上游流式响应中断',True)
         return pending
     return b"".join(chunks)
 
 
-def stream_event(block):
+def recover_review_stream(state, frame_count):
+    if not state or not state['items'] or state['started'] - state['items'].keys():
+        return None
+    items = [state['items'][key] for key in sorted(state['items'])]
+    if any(item.get('type') not in ('message','reasoning') for item in items):
+        return None
+    messages = [item for item in items if item.get('type') == 'message']
+    if len(messages) != 1 or messages[0].get('role') != 'assistant' or messages[0].get('status') != 'completed':
+        return None
+    content = messages[0].get('content',[])
+    if not content or any(part.get('type') != 'output_text' for part in content):
+        return None
+    text = ''.join(part.get('text','') for part in content)
+    try:
+        parse_review(text,frame_count,strict=True)
+    except (StageError,TypeError):
+        return None
+    return {'status':'output_recovered','output':items,'model':state['model'],
+            '_transport':{'review_message_recovered':True,'response_completed':False},'usage':{}}
+
+
+def stream_event(block, state=None):
     try:
         lines=block.decode('utf-8-sig').splitlines()
         payload='\n'.join(line[5:].removeprefix(' ') for line in lines if line.startswith('data:'))
@@ -215,17 +256,37 @@ def stream_event(block):
             raise diagnose(ValueError(upstream_failure(data)),'request')
         if kind=='response.incomplete':
             raise StageError('request','output_incomplete','上游输出未完成或达到输出上限')
+        if state is not None:
+            if kind in ('response.created','response.in_progress'):
+                response = data.get('response',{})
+                if not isinstance(response,dict):
+                    raise StageError('request','stream_format','上游流式事件格式无效')
+                state['model'] = response.get('model',state['model'])
+            if kind == 'response.output_item.added' and type(data.get('output_index')) is int:
+                state['started'].add(data['output_index'])
+            if kind == 'response.output_item.done' and type(data.get('output_index')) is int:
+                item = data.get('item')
+                if (isinstance(item,dict) and (item.get('status') == 'completed'
+                        or (item.get('type') == 'reasoning' and item.get('status') is None))):
+                    state['items'][data['output_index']] = item
         if kind=='response.completed':
             result=data.get('response')
             if not isinstance(result,dict):
                 raise StageError('request','stream_format','上游流式结果格式无效')
+            result = dict(result)
+            result.pop('_transport',None)
+            if state and not result.get('output') and result.get('status') == 'completed':
+                recovered = recover_review_stream(state,state["frame_count"])
+                if recovered:
+                    result = dict(result,output=recovered['output'],
+                                  _transport={'review_message_recovered':True,'response_completed':True})
             return result
     except (UnicodeDecodeError,json.JSONDecodeError,TypeError):
         raise StageError('request','stream_format','上游流式事件格式无效') from None
     return None
 
 
-def public_post(url, body, headers, timeout, limit=MAX_RESPONSE, streaming=False):
+def public_post(url, body, headers, timeout, limit=MAX_RESPONSE, streaming=False, review_frames=0):
     # Pin the checked IP while preserving hostname certificate verification; no DNS rebinding or proxy bypass.
     parsed, ips = public_addresses(url)
     conn = http.client.HTTPSConnection(parsed.hostname, parsed.port or 443, timeout=timeout)
@@ -239,7 +300,7 @@ def public_post(url, body, headers, timeout, limit=MAX_RESPONSE, streaming=False
         if response.status != 200:
             delay = retry_delay(response.getheader('Retry-After'))
             raise StageError('request',f'http_{response.status}',f"HTTP {response.status}：上游请求失败",response.status in (408,429) or 500 <= response.status < 600,delay)
-        return read_response(response, sock, deadline, limit, streaming)
+        return read_response(response, sock, deadline, limit, streaming, review_frames)
     finally:
         conn.close()
 
@@ -333,16 +394,27 @@ def _call_model_direct(config, prompt):
         path = "/chat/completions"
         body = dict(common, messages=[dict(role="user", content=prompt)],
                     reasoning_effort=config["effort"], max_completion_tokens=config["max_output_tokens"])
+    if config.get('_output_schema'):
+        spec = {'name':'pelican_review','strict':True,'schema':config['_output_schema']}
+        if streaming:
+            body['text'] = {'format':dict(spec,type='json_schema')}
+        else:
+            body['response_format'] = {'type':'json_schema','json_schema':spec}
     req = request.Request(config["base_url"] + path, json.dumps(body).encode(),
                           {"Authorization": "Bearer " + config["api_key"], "Content-Type": "application/json", "Accept": "text/event-stream" if streaming else "application/json", "User-Agent": "PelicanWatch/1.0"})
     try:
         if config.get("_guest"):
-            raw = public_post(req.full_url, req.data, dict(req.header_items()), config["timeout_seconds"], limit, streaming)
+            raw = public_post(req.full_url, req.data, dict(req.header_items()), config["timeout_seconds"], limit, streaming, config.get("_review_frame_count",0))
         else:
             with request.build_opener(NoRedirect()).open(req, timeout=config["timeout_seconds"]) as response:
-                raw = read_response(response, response.fp.raw._sock, deadline, limit, streaming)
+                raw = read_response(response, response.fp.raw._sock, deadline, limit, streaming, config.get("_review_frame_count",0))
     except error.HTTPError as exc:
-        # Never echo upstream bodies: some gateways include request credentials.
+        # Narrow compatibility fallback only; never publish upstream error bodies.
+        if config.get('_output_schema') and exc.code in (400,422):
+            detail = exc.read(65536).decode('utf-8','replace').lower()
+            if (re.search(r'json_schema|response_format|text[.\s]+format',detail)
+                    and re.search(r'unsupported|not supported|not support|unknown parameter|unrecognized',detail)):
+                raise StageError('request','structured_unsupported','上游不支持结构化审核输出') from None
         reasons = {401: "API Key 无效或已过期", 403: "无权访问该模型", 404: "接口或模型不存在，请检查协议", 429: "额度不足或触发限流", 524: "上游网关等待模型响应超时"}
         retry_after = retry_delay(exc.headers.get('Retry-After'))
         raise StageError('request', f'http_{exc.code}', f"HTTP {exc.code}：{reasons.get(exc.code, '上游接口请求失败')}",
@@ -358,12 +430,13 @@ def _call_model_direct(config, prompt):
     if len(raw) > limit:
         raise ValueError(f"上游响应超过 {limit // (1024 * 1024)} MB 限制")
     data = raw if isinstance(raw,dict) else parse_model_response(raw)
+    transport = data.get('_transport',{}) if isinstance(raw,dict) else {}
     if not isinstance(data, dict) or data.get("error"):
         raise ValueError(upstream_failure(data) if isinstance(data, dict) else "上游返回错误响应")
     if len(json.dumps(data).encode()) > MAX_RESPONSE:
         raise ValueError("上游完整结果超过 2 MB 限制")
     if config["protocol"] == "responses":
-        if data.get("status") != "completed":
+        if data.get("status") != "completed" and not (config.get('_review_frame_count') and transport.get('review_message_recovered')):
             raise ValueError("上游响应未完成，可能达到输出上限或被中断")
         text = "\n".join(part.get("text", "") for item in data.get("output", [])
                          if item.get("type") == "message" for part in item.get("content", [])
@@ -377,13 +450,24 @@ def _call_model_direct(config, prompt):
             text = "\n".join(p.get("text", "") for p in text if p.get("type") == "text")
     if not isinstance(text, str) or not text.strip():
         raise ValueError("上游未返回可用的文本内容")
-    return text, data.get("usage", {}), str(data.get("model", "未返回"))
+    if transport.get('review_message_recovered'):
+        parse_review(text,config['_review_frame_count'],strict=True)
+    usage = dict(data.get('usage') or {})
+    if transport:
+        usage['_transport'] = transport
+    return text, usage, str(data.get("model", "未返回"))
 
 
 def call_model(config, prompt):
     # Credentials travel over stdin only. A process deadline also covers blocking DNS.
     public_config = {k:config[k] for k in (*NODE_FIELDS, 'timeout_seconds', 'max_output_tokens')}
+    # Leave the worker time to return a finalized message before its hard process deadline.
+    process_budget = remaining(config)
+    public_config['timeout_seconds'] = max(.01,process_budget-min(1,process_budget*.05))
     public_config['_guest'] = bool(config.get('_guest'))
+    for key in ('_output_schema','_review_frame_count'):
+        if key in config:
+            public_config[key] = config[key]
     process = subprocess.Popen([sys.executable, str(ROOT / 'model_worker.py')],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
     try:
@@ -498,7 +582,7 @@ def perform_test(config, prompt, nonce, model_call, kind="pelican", on_progress=
     review, error_code, stage = None, None, 'generation'
     config = dict(config, _nonce=nonce)
     if '_deadline' not in config:
-        config['_deadline'] = time.monotonic() + config['timeout_seconds'] + 45 + config.get('review_timeout_seconds',120)
+        config['_deadline'] = time.monotonic() + config['timeout_seconds'] + 45 + config.get('review_timeout_seconds',240)
     def snapshot(status, message='', current_stage=None):
         safe_usage = {k:v for k,v in usage.items() if k in ('input_tokens','output_tokens','total_tokens','prompt_tokens','completion_tokens') and type(v) is int} if isinstance(usage,dict) else {}
         for key,value in (review or {}).get('usage',{}).items():
@@ -510,7 +594,7 @@ def perform_test(config, prompt, nonce, model_call, kind="pelican", on_progress=
             review=review, evaluation_level='basic' if config.get('_guest') else 'visual', scoring_version=3)
     def evidence_progress(metadata):
         nonlocal review
-        review = {'status':'running','checks':{},'render':metadata,'version':2}
+        review = {'status':'running','checks':{},'render':metadata,'version':3}
         if on_progress:
             on_progress(snapshot('running',current_stage='review'))
     config['_evidence_progress'] = evidence_progress
@@ -542,7 +626,7 @@ def perform_test(config, prompt, nonce, model_call, kind="pelican", on_progress=
                 details = dict(review or {})
                 details.update(getattr(exc,'review_details',{}))
                 review = dict(details, status='error',checks={},reason=message,
-                              error_code=error_code, stage=stage, version=2)
+                              error_code=error_code, stage=stage, version=3)
                 status = 'error'
     except Exception as exc:
         failure = diagnose(exc,stage)
@@ -622,6 +706,10 @@ class Monitor:
         self.login_failures = []
         self.workers = {}
         self.pending_failures = {}
+        self.pending_results = {}
+        self.result_lock = threading.RLock()
+        self.result_directory = directory / "pending-results"
+        self.result_directory.mkdir(exist_ok=True,mode=0o700)
         self.scheduler_heartbeat = time.monotonic()
         self.render_health = {'status':'pending', 'checked_at':None}
         self.render_probe = None
@@ -668,6 +756,19 @@ class Monitor:
                 db.execute("INSERT INTO nodes(name,base_url,api_key,model,effort,protocol,active) VALUES (?,?,?,?,?,?,1)",
                            ("默认节点", *(config[key] for key in NODE_FIELDS)))
             self.store_settings(db, config)
+            # Replay durable final results before marking interrupted workers as errors.
+            restored = []
+            for path in self.result_directory.glob('*.json'):
+                if not path.stem.isdigit() or path.is_symlink() or path.stat().st_size > 8*1024*1024:
+                    continue
+                try:
+                    result = json.loads(path.read_text())
+                    if result['status'] not in ('passed','invalid','uncertain','error'):
+                        continue
+                    self.write_result(db,int(path.stem),result)
+                    restored.append(path)
+                except (KeyError,ValueError,TypeError):
+                    event('persist','invalid_result_journal')
             for row in db.execute("SELECT id,tests FROM runs WHERE status='running'").fetchall():
                 tests = json.loads(row["tests"])
                 for test in tests.values():
@@ -677,6 +778,8 @@ class Monitor:
         with contextlib.closing(sqlite3.connect(self.path, timeout=10)) as db:
             db.execute('PRAGMA journal_mode=WAL')
         os.chmod(self.path, 0o600)
+        for path in restored:
+            path.unlink(missing_ok=True)
 
     def password_configured(self):
         with self.db() as db:
@@ -842,7 +945,7 @@ class Monitor:
             row = db.execute("""INSERT INTO runs (started,status,source,model,base_url,effort,protocol,scene,nonce,prompt,test_version,tests,node_id,node_name)
                 VALUES (?,'running',?,?,?,?,?,?,?,?,3,?,?,?)""", (now, source, config["model"], config["base_url"], config["effort"], config["protocol"], scene, nonce, prompt, json.dumps({"pelican":{"status":"running"},"candy":{"status":"running"}}),config["active_node_id"],config["node_name"]))
             run_id = row.lastrowid
-            budget = config['timeout_seconds'] + 45 + config.get('review_timeout_seconds',120)
+            budget = config['timeout_seconds'] + 45 + config.get('review_timeout_seconds',240)
             config.update(_deadline=time.monotonic()+budget, _cancel=threading.Event(), _scene=scene)
             db.execute('UPDATE runs SET lease_until=? WHERE id=?',(time.time()+budget+5,run_id))
             if source == "scheduled":
@@ -879,11 +982,16 @@ class Monitor:
 
     def recover_runs(self):
         with self.lock:
+            with self.result_lock:
+                for run_id,result in list(self.pending_results.items()):
+                    self.persist_result(run_id,result)
             for run_id,(code,message) in list(self.pending_failures.items()):
                 self.fail_run(run_id,code,message)
             with self.db() as db:
                 rows = db.execute("SELECT id,started,lease_until FROM runs WHERE status='running'").fetchall()
             for row in rows:
+                if row['id'] in self.pending_results and self.pending_results[row['id']]['status'] != 'running':
+                    continue
                 item = self.workers.get(row['id'])
                 if row['lease_until'] and row['lease_until'] <= time.time():
                     if item:
@@ -893,28 +1001,57 @@ class Monitor:
                     self.fail_run(row['id'],'worker_lost','检测线程已退出，已有结果已保留')
             self.workers = {key:value for key,value in self.workers.items() if value[0].is_alive()}
 
+    @staticmethod
+    def write_result(db, run_id, result):
+        db.execute("UPDATE runs SET status=?,finished=?,output=?,svg=?,checks=?,error=?,usage=?,returned_model=?,tests=? WHERE id=? AND status='running'",
+                   (result['status'],result['finished'],result['output'],result['svg'],json.dumps(result['checks']),
+                    result['error'],json.dumps(result['usage']),result['returned_model'],json.dumps(result['tests']),run_id))
+
+    def persist_result(self, run_id, result):
+        # Progress snapshots are immutable. The final verdict is journaled before the DB write.
+        with self.result_lock:
+            self.pending_results[run_id] = result
+            journal = self.result_directory / f'{run_id}.json'
+            if result['status'] != 'running':
+                try:
+                    atomic_write(journal,json.dumps(result,ensure_ascii=False).encode())
+                except OSError:
+                    event('persist','journal_unavailable',run_id=run_id)
+            try:
+                with self.db() as db:
+                    self.write_result(db,run_id,result)
+            except sqlite3.Error:
+                event('persist','result_pending',run_id=run_id)
+                return
+            self.pending_results.pop(run_id,None)
+            try:
+                journal.unlink(missing_ok=True)
+            except OSError:
+                event('persist','journal_cleanup_pending',run_id=run_id)
+
     def execute(self, run_id, config, prompt, nonce):
         def persist(result):
             pelican = result.get('tests',{}).get('pelican',{})
             if (pelican.get('stage') == 'render' and pelican.get('status') == 'error'
                     and pelican.get('error_code') in ('render_resources','browser_missing','render_process')):
                 self.render_health = {'status':'error','checked_at':time.time(),'error_code':pelican.get('error_code')}
-            with self.db() as db:
-                # A timed-out worker must never overwrite its terminal result.
-                db.execute("UPDATE runs SET status=?,finished=?,output=?,svg=?,checks=?,error=?,usage=?,returned_model=?,tests=? WHERE id=? AND status='running'",
-                           (result['status'],result['finished'],result['output'],result['svg'],json.dumps(result['checks']),
-                            result['error'],json.dumps(result['usage']),result['returned_model'],json.dumps(result['tests']),run_id))
+            self.persist_result(run_id,result)
         def evidence(svg, frames, metadata):
             try:
                 with self.db() as db:
                     protected = [row[0] for row in db.execute("SELECT id FROM runs WHERE status='running'")]
-                prune_evidence(self.path.parent,protected,reserve=17*1024*1024)
+                prune_evidence(self.path.parent,protected,reserve=24*1024*1024)
                 manifest = save_evidence(self.path.parent,run_id,svg,frames,metadata)
                 self.render_health = {'status':'passed','checked_at':time.time()}
                 return dict(manifest, run_id=run_id)
             except Exception:
                 raise StageError('persist','evidence_write','审核截图保存失败，请检查磁盘空间和权限') from None
-        config = dict(config,_save_evidence=evidence)
+        def receipt(text, metadata):
+            safe_text = redact(redact(text,config),config.get('_judge',{}))
+            root = self.path.parent / 'artifacts' / str(run_id)
+            atomic_write(root / f"review-{metadata['attempt']}.json",
+                         json.dumps(dict(metadata,text=safe_text),ensure_ascii=False).encode())
+        config = dict(config,_save_evidence=evidence,_save_review_receipt=receipt)
         try:
             perform_suite(config,prompt,nonce,self.model_call,on_result=persist)
         except Exception as exc:
@@ -938,9 +1075,9 @@ class Monitor:
         except sqlite3.Error:
             database = False
         scheduler = time.monotonic()-self.scheduler_heartbeat < 30
-        return dict(ready=database and scheduler and self.render_health['status']=='passed' and not self.pending_failures,
+        return dict(ready=database and scheduler and self.render_health['status']=='passed' and not self.pending_failures and not self.pending_results,
                     database=database,scheduler=scheduler,renderer=self.render_health,
-                    recovery_pending=len(self.pending_failures))
+                    recovery_pending=len(self.pending_failures)+len(self.pending_results))
 
     def prepare_guest(self, values):
         if not self.settings()["guest_enabled"]:

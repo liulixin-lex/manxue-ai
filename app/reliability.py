@@ -97,23 +97,34 @@ def event(stage, code, **fields):
 
 
 def remaining(config, ceiling=None):
-    budget = config.get('timeout_seconds', 300) if ceiling is None else ceiling
-    budget = min(budget, config.get('_deadline', float('inf')) - time.monotonic())
     if config.get('_cancel') and config['_cancel'].is_set():
         raise StageError('task', 'cancelled', '检测已取消')
-    if budget <= 0:
+    now = time.monotonic()
+    task_budget = config.get('_deadline', float('inf')) - now
+    if task_budget <= 0:
         raise StageError('task', 'deadline', '整轮检测超过时间预算')
+    stage_budget = config.get('_stage_deadline', float('inf')) - now
+    stage = config.get('_stage', 'request')
+    if stage_budget <= 0:
+        label = {'review':'视觉审核','generation':'生成'}.get(stage,'请求')
+        raise StageError(stage, stage+'_timeout', label+'阶段超过时间预算')
+    budget = config.get('timeout_seconds', 300) if ceiling is None else ceiling
+    budget = min(budget, task_budget, stage_budget)
+    if budget <= 0:
+        raise StageError(stage, 'request_timeout', '本次请求超过时间预算', True)
     return budget
 
 
 def request_with_retries(config, prompt, model_call, stage, attempts):
-    deadline = time.monotonic() + remaining(config)
+    budget = remaining(config)
+    deadline = min(config.get('_stage_deadline',time.monotonic()+budget),config.get('_deadline',float('inf')))
+    config = dict(config, _stage=stage, _stage_deadline=deadline)
     for index in range(config.get('retry_count', 2) + 1):
         started = time.monotonic()
-        attempt = {'stage': stage, 'attempt': index + 1}
+        attempt = {'stage': stage, 'attempt': len(attempts) + 1}
         attempts.append(attempt)
         try:
-            budget = remaining(config, deadline - time.monotonic())
+            budget = remaining(config, min(deadline - time.monotonic(), config.get('_attempt_timeout_seconds', float('inf'))))
             with request_slot(dict(config, timeout_seconds=budget)) as request_config:
                 result = model_call(request_config, prompt)
             if isinstance(result[1],dict) and isinstance(result[1].get('_transport'),dict):
@@ -126,10 +137,13 @@ def request_with_retries(config, prompt, model_call, stage, attempts):
                 failure.stage = stage
             attempt.update(status='error', error_code=failure.code,
                            duration_seconds=round(time.monotonic()-started, 3))
-            event(stage, failure.code, attempt=index+1)
+            event(stage, failure.code, attempt=attempt['attempt'])
             delay = max(random.uniform(.5, 1) * min(2**index, 8), failure.retry_after or 0)
+            minimum = config.get('_minimum_retry_seconds', 0)
             if (not failure.retryable or index >= config.get('retry_count', 2)
-                    or deadline - time.monotonic() <= delay):
+                    or deadline - time.monotonic() <= delay + minimum):
+                if failure.retryable and index < config.get('retry_count', 2) and minimum:
+                    attempt['retry_skipped'] = 'insufficient_stage_budget'
                 raise failure from None
             cancel = config.get('_cancel')
             if cancel:

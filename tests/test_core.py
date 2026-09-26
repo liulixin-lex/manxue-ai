@@ -132,8 +132,18 @@ class ReviewTests(unittest.TestCase):
             if failure=='range':value['evidence']['motion']=[12]
             if failure=='contradiction':value['checks']['bicycle']=False
             if failure=='type':value['checks']['motion']='true'
-            with self.subTest(failure=failure),self.assertRaises(StageError):
-                visual_review.parse_review(json.dumps(value))
+            with self.subTest(failure=failure):
+                result = visual_review.parse_review(json.dumps(value))
+                self.assertEqual('invalid' if failure == 'contradiction' else 'uncertain',result['status'])
+                self.assertTrue(result['checks']['pelican'])
+                self.assertTrue(result['checks']['scene'])
+                self.assertTrue(result['schema_warnings'])
+                if failure == 'contradiction':
+                    self.assertFalse(result['checks']['bicycle'])
+                    self.assertIsNone(result['checks']['riding'])
+                self.assertIsNone(result['checks']['motion'])
+                with self.assertRaises(StageError):
+                    visual_review.parse_review(json.dumps(value),strict=True)
 
     def test_unknown_remains_unknown(self):
         value=self.verdict();value['checks']['motion']=None;value['evidence']['motion']=[]

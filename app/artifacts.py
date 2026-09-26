@@ -62,3 +62,27 @@ def atomic_write(path, data):
         os.replace(temp, path)
     finally:
         temp.unlink(missing_ok=True)
+
+
+def load_evidence(directory, run_id, svg):
+    """Reload the exact original frames, rejecting expiry, replacement and corruption."""
+    root = Path(directory) / 'artifacts' / str(int(run_id))
+    manifest = json.loads((root / 'manifest.json').read_text())
+    if manifest.get('svg_sha256') != hashlib.sha256(svg.encode()).hexdigest():
+        raise ValueError('SVG does not match persisted evidence')
+    entries = manifest.get('frames',[])
+    if not 12 <= len(entries) <= 16:
+        raise ValueError('Incomplete evidence')
+    frames, total = [], 0
+    for index, entry in enumerate(entries):
+        path = root / f'{index}.png'
+        if path.is_symlink() or path.stat().st_size > 16*1024*1024:
+            raise ValueError('Invalid evidence file')
+        png = path.read_bytes()
+        total += len(png)
+        if (total > 16*1024*1024 or entry.get('index') != index or entry.get('bytes') != len(png)
+                or entry.get('sha256') != hashlib.sha256(png).hexdigest()
+                or not png.startswith(b'\x89PNG\r\n\x1a\n')):
+            raise ValueError('Evidence hash or size mismatch')
+        frames.append({'time':entry['time'],'png':base64.b64encode(png).decode()})
+    return {'frames':frames,'metadata':manifest}

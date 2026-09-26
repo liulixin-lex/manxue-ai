@@ -1,4 +1,6 @@
 """Versioned visual judging over persisted, reproducible frame evidence."""
+import hashlib
+import time
 import json
 import os
 from pathlib import Path
@@ -112,67 +114,145 @@ def review_content(frames, protocol, scene='', nonce=''):
     return content
 
 
-def parse_review(text, frame_count=12):
+CHECK_LABELS = dict(zip(REVIEW_CHECKS, ('鹈鹕形态','自行车结构','骑乘关系','骑行动作','指定场景','校验码','循环连续性')))
+
+
+def review_schema(frame_count):
+    return {'type':'object', 'additionalProperties':False, 'required':['checks','evidence'], 'properties':{
+        'checks':{'type':'object','additionalProperties':False,'required':list(REVIEW_CHECKS),
+                  'properties':{k:{'type':['boolean','null']} for k in REVIEW_CHECKS}},
+        'evidence':{'type':'object','additionalProperties':False,'required':list(REVIEW_CHECKS),
+                    'properties':{k:{'type':'array','items':{'type':'integer','minimum':0,'maximum':frame_count-1},
+                                     'maxItems':frame_count} for k in REVIEW_CHECKS}}}}
+
+
+def summarize_review(checks, evidence, warnings=()):
+    failed = [k for k in REVIEW_CHECKS if checks[k] is False]
+    pending = [k for k in REVIEW_CHECKS if checks[k] is None]
+    reason = '；'.join(REVIEW_CHECKS[k] for k in failed)
+    if pending:
+        reason += ('；' if reason else '') + '尚不能确认：' + '、'.join(CHECK_LABELS[k] for k in pending)
+    return {'status':'invalid' if failed else 'uncertain' if pending else 'passed',
+            'checks':checks,'evidence':evidence,'reason':reason,'version':3,
+            'pending_checks':pending,'schema_warnings':list(warnings)}
+
+
+def parse_review(text, frame_count=12, strict=False):
+    # Harmless wrappers/extra metadata are allowed; no coercion of strings to booleans.
+    def unique_keys(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicate key')
+            result[key] = value
+        return result
     text = text.strip()
-    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, re.S)
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, re.S | re.I)
     try:
-        value = json.loads(fenced[1] if fenced else text)
-        checks = value["checks"]
-        evidence = value['evidence']
-        if set(value) != {'checks', 'evidence'} or not isinstance(evidence, dict) or set(evidence) != set(REVIEW_CHECKS):
+        value = json.loads(fenced[1] if fenced else text, object_pairs_hook=unique_keys)
+        checks, evidence = value['checks'], value.get('evidence', {})
+        if not isinstance(checks,dict) or not isinstance(evidence,dict):
             raise ValueError()
-        if not isinstance(checks, dict) or set(checks) != set(REVIEW_CHECKS) or any(v is not None and type(v) is not bool for v in checks.values()):
+        if not any(k in checks and (checks[k] is None or type(checks[k]) is bool) for k in REVIEW_CHECKS):
             raise ValueError()
-        for key, indices in evidence.items():
-            if (not isinstance(indices, list) or len(indices) > frame_count
-                    or any(type(i) is not int or not 0 <= i < frame_count for i in indices)
-                    or (checks[key] is not None and not indices)):
-                raise ValueError()
-        if (checks['bicycle'] is False and (checks['riding'] is True or checks['motion'] is True)) or (checks['riding'] is False and checks['motion'] is True):
-            raise ValueError()
-    except (ValueError, KeyError, TypeError):
-        raise StageError('review', 'review_schema', '视觉审核返回格式、证据编号或判断依赖不符合规则') from None
-    status = "invalid" if False in checks.values() else "uncertain" if None in checks.values() else "passed"
-    reason = "；".join(REVIEW_CHECKS[k] for k, v in checks.items() if v is False)
-    if status == "uncertain":
-        reason = "画面证据不足，无法确认全部骑行要求"
-    return {"status": status, "checks": checks, "evidence": evidence, "reason": reason, "version": 2}
+    except (ValueError,KeyError,TypeError,AttributeError):
+        raise StageError('review','review_schema','未收到可解析的视觉审核结论') from None
+    clean, refs, warnings = {}, {}, []
+    for key in REVIEW_CHECKS:
+        indices = evidence.get(key, [])
+        valid = (key in checks and (checks[key] is None or type(checks[key]) is bool)
+                 and isinstance(indices,list) and len(indices) <= frame_count
+                 and all(type(i) is int and 0 <= i < frame_count for i in indices)
+                 and (checks[key] is None or bool(indices)))
+        if not valid:
+            clean[key], refs[key] = None, []
+            warnings.append(key+':invalid_evidence_or_value')
+        else:
+            clean[key], refs[key] = checks[key], sorted(set(indices))
+    for dependency, dependent in (('bicycle','riding'),('bicycle','motion'),('riding','motion')):
+        if clean[dependency] is not True and clean[dependent] is True:
+            clean[dependent], refs[dependent] = None, []
+            warnings.append(dependent+':unconfirmed_dependency')
+    if strict and (warnings or set(checks) != set(REVIEW_CHECKS) or set(evidence) != set(REVIEW_CHECKS)):
+        raise StageError('review','review_schema','视觉审核结果缺少完整、无矛盾的帧证据')
+    return summarize_review(clean, refs, warnings)
+
+
+def review_bundle(config, bundle, model_call):
+    """Judge immutable frames, also usable for replays without regenerating the SVG."""
+    frames, metadata = bundle['frames'], bundle['metadata']
+    if not 12 <= len(frames) <= 16:
+        raise StageError('review','review_evidence','审核截图数量不完整')
+    if metadata['unique_frames'] == 1:
+        return dict(summarize_review(dict.fromkeys(REVIEW_CHECKS), {k:[] for k in REVIEW_CHECKS}),
+                    reason='采样画面无可观察变化，无法确认骑行动作',render=metadata,attempts=[])
+    attempts, receipts, total_usage = [], [], {}
+    try:
+        judge = config.get('_judge',config)
+        budget = remaining(config, config.get('review_timeout_seconds',240))
+        review_config = dict(config, **{k:judge[k] for k in ('base_url','api_key','model','effort','protocol')},
+            timeout_seconds=budget, max_output_tokens=min(config['max_output_tokens'],4000),
+            _stage='review', _stage_deadline=time.monotonic()+budget,
+            _attempt_timeout_seconds=min(budget,120), _minimum_retry_seconds=min(60,budget),
+            _review_frame_count=len(frames))
+        if config.get('review_effort','inherit') != 'inherit':
+            review_config['effort'] = config['review_effort']
+        if config.get('review_format','auto') != 'prompt':
+            review_config['_output_schema'] = review_schema(len(frames))
+        content = review_content(frames,review_config['protocol'],config.get('_scene',''),config.get('_nonce',''))
+        if metadata['sampling_limited']:
+            content[0]['text'] += '\n采样未覆盖完整动画时间轴；motion 与 loop 只能填 null，其他项目依据实际画面评价。'
+        max_attempts = config.get('retry_count',2)+1
+        repaired = False
+        while True:
+            review_config['retry_count'] = max(0,max_attempts-len(attempts)-1)
+            try:
+                text, usage, returned_model = request_with_retries(review_config,content,model_call,'review',attempts)
+            except StageError as exc:
+                if (exc.code == 'structured_unsupported' and config.get('review_format','auto') == 'auto'
+                        and review_config.pop('_output_schema',None) is not None and len(attempts) < max_attempts
+                        and remaining(review_config) >= review_config['_minimum_retry_seconds']):
+                    continue
+                raise
+            for key,value in (usage.items() if isinstance(usage,dict) else []):
+                if key in ('input_tokens','output_tokens','total_tokens','prompt_tokens','completion_tokens') and type(value) is int:
+                    total_usage[key] = total_usage.get(key,0)+value
+            receipt = {'sha256':hashlib.sha256(text.encode()).hexdigest(),'bytes':len(text.encode())}
+            receipts.append(receipt)
+            if config.get('_save_review_receipt'):
+                try:
+                    config['_save_review_receipt'](text,dict(receipt,attempt=len(attempts)))
+                    receipt['saved'] = True
+                except OSError:
+                    receipt['saved'] = False
+            try:
+                result = parse_review(text,len(frames))
+                break
+            except StageError:
+                if repaired or len(attempts) >= max_attempts or remaining(review_config) < review_config['_minimum_retry_seconds']:
+                    raise
+                repaired = True
+                attempts[-1]['validation'] = 'review_schema'
+                content[0]['text'] += '\n上次响应无法解析；请重新依据相同截图输出规定的 JSON，不要输出解释或代码。'
+        if metadata['sampling_limited']:
+            result['checks'].update(motion=None,loop=None)
+            result['evidence'].update(motion=[],loop=[])
+            result = summarize_review(result['checks'],result['evidence'],result['schema_warnings'])
+        result.update(render=metadata,attempts=attempts,receipts=receipts,judge_model=judge['model'],
+                      judge_effort=review_config['effort'],judge_mode='independent' if '_judge' in config else 'self',
+                      returned_model=returned_model,frame_times=[f['time'] for f in frames])
+        result['usage'] = total_usage
+        result['usage_complete'] = not any(a.get('transport',{}).get('response_completed') is False for a in attempts)
+        return result
+    except StageError as exc:
+        exc.review_details = {'render':metadata,'attempts':attempts,'receipts':receipts,'version':3}
+        raise
 
 
 def review_pelican(config, svg, model_call):
-    bundle = render_evidence(svg, remaining(config, 45), config.get('_cancel'))
-    frames, metadata = bundle['frames'], bundle['metadata']
+    bundle = render_evidence(svg,remaining(config,45),config.get('_cancel'))
     if config.get('_save_evidence'):
-        metadata = config['_save_evidence'](svg, frames, metadata)
+        bundle['metadata'] = config['_save_evidence'](svg,bundle['frames'],bundle['metadata'])
     if config.get('_evidence_progress'):
-        config['_evidence_progress'](metadata)
-    if metadata['unique_frames'] == 1:
-        return {'status':'uncertain', 'checks':{}, 'reason':'采样画面无可观察变化，无法确认骑行动作',
-                'version':2, 'render':metadata, 'attempts':[]}
-    attempts = []
-    try:
-        judge = config.get('_judge', config)
-        review_config = dict(config, **{k:judge[k] for k in ('base_url', 'api_key', 'model', 'effort', 'protocol')},
-                             timeout_seconds=remaining(config, config.get('review_timeout_seconds', 120)),
-                             max_output_tokens=min(config['max_output_tokens'], 4000))
-        content = review_content(frames, review_config['protocol'], config.get('_scene', ''), config.get('_nonce', ''))
-        if metadata['sampling_limited']:
-            content[0]['text'] += '\n采样未覆盖完整动画时间轴；motion 与 loop 只能填 null，其他项目依据实际画面评价。'
-        text, usage, returned_model = request_with_retries(review_config, content,
-            model_call, 'review', attempts)
-        result = parse_review(text, len(frames))
-    except StageError as exc:
-        exc.review_details = {'render': metadata, 'attempts': attempts, 'version': 2}
-        raise
-    # Retain only our validated verdict and fixed reasons, never arbitrary model output.
-    if metadata['sampling_limited']:
-        result['checks'].update(motion=None, loop=None)
-        result['evidence'].update(motion=[], loop=[])
-        failed = [key for key,value in result['checks'].items() if value is False]
-        result.update(status='invalid' if failed else 'uncertain',
-                      reason='；'.join(REVIEW_CHECKS[key] for key in failed) if failed else '动画时间轴超出采样预算，尚不能确认完整动作')
-    result.update(render=metadata, attempts=attempts, judge_model=judge['model'],
-                  judge_mode='independent' if '_judge' in config else 'self', returned_model=returned_model)
-    result["frame_times"] = [f["time"] for f in frames]
-    result["usage"] = {k: v for k, v in usage.items() if k in ("input_tokens", "output_tokens", "total_tokens", "prompt_tokens", "completion_tokens") and type(v) is int} if isinstance(usage, dict) else {}
-    return result
+        config['_evidence_progress'](bundle['metadata'])
+    return review_bundle(config,bundle,model_call)

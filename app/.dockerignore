@@ -5,6 +5,7 @@
 !reliability.py
 !model_worker.py
 !artifacts.py
+!replay_review.py
 !requirements.txt
 !web/
 !web/**
