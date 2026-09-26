@@ -54,6 +54,9 @@ class IndependentResultTests(ResultFixture):
         state=self.monitor.state()
         self.assertEqual(3,state['stats']['total'])
         self.assertEqual(1,state['stats']['passed'])
+        self.assertEqual(1,state['stats']['invalid'])
+        self.assertEqual(1,state['stats']['errors'])
+        self.assertEqual(3,state['stats']['completed'])
         self.assertEqual(4,state['visual_stats']['total'])
         self.assertEqual(3,state['visual_stats']['passed'])
 
@@ -127,6 +130,8 @@ class ResultBrowserTests(ResultFixture):
                 errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
                 page.goto(root);page.wait_for_selector('#candy-grid button')
                 self.assertEqual(3,page.locator('#candy-grid button').count())
+                self.assertEqual('50.0%',page.locator('#rate').inner_text())
+                self.assertEqual('1 / 2 次通过',page.locator('#rate-note').inner_text())
                 self.assertTrue(page.locator('#view-pelican').is_visible())
                 self.assertFalse(page.locator('#view-guest').is_visible())
                 colors={'passed':'rgb(35, 132, 95)','invalid':'rgb(237, 189, 64)','error':'rgb(206, 59, 64)'}
@@ -173,6 +178,43 @@ class ResultBrowserTests(ResultFixture):
                 page.route('**/vendor/gsap.min.js',lambda route:route.abort())
                 page.reload();page.wait_for_selector('#tab-guest');page.click('#tab-observatory')
                 self.assertTrue(page.locator('#view-pelican').is_visible())
+                self.assertFalse(errors,errors)
+                browser.close()
+        finally:http.shutdown();http.server_close();thread.join()
+
+    def test_success_rate_excludes_request_failures_and_pending_runs(self):
+        from playwright.sync_api import sync_playwright
+        http=server.BoundedHTTPServer(('127.0.0.1',0),server.Handler);http.monitor=self.monitor
+        thread=threading.Thread(target=http.serve_forever,daemon=True);thread.start()
+        try:
+            with sync_playwright() as p:
+                browser=p.chromium.launch(args=['--disable-dev-shm-usage'])
+                page=browser.new_page(reduced_motion='reduce')
+                errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
+                page.goto(f'http://127.0.0.1:{http.server_port}')
+                page.wait_for_selector('#candy-grid button')
+                self.assertEqual('50.0%',page.locator('#rate').inner_text())
+                self.seed('error',None);page.evaluate('refresh()')
+                self.assertEqual('50.0%',page.locator('#rate').inner_text())
+                self.assertEqual('1 / 2 次通过',page.locator('#rate-note').inner_text())
+                self.assertIn('请求失败 2',page.locator('#error-note').inner_text())
+                self.assertEqual(2,page.locator('#candy-grid .candy-square.error').count())
+                # An errors-only history has no answer sample, not a zero success rate.
+                with self.monitor.db() as db:
+                    db.execute('DELETE FROM runs WHERE id IN (?,?)',self.ids[:2])
+                page.evaluate('refresh()')
+                self.assertEqual('—%',page.locator('#rate').inner_text())
+                self.assertEqual('暂无有效答题结果',page.locator('#rate-note').inner_text())
+                self.assertIn('请求失败 2',page.locator('#error-note').inner_text())
+                self.seed('passed',None)
+                self.seed('running',None);self.seed('queued',None)
+                page.evaluate('refresh()')
+                self.assertEqual('100.0%',page.locator('#rate').inner_text())
+                self.assertEqual('1 / 1 次通过',page.locator('#rate-note').inner_text())
+                self.seed('invalid',None);page.evaluate('refresh()')
+                self.assertEqual('50.0%',page.locator('#rate').inner_text())
+                self.assertEqual('1 / 2 次通过',page.locator('#rate-note').inner_text())
+                self.assertEqual('请求失败 2 · 降智 1',page.locator('#error-note').inner_text())
                 self.assertFalse(errors,errors)
                 browser.close()
         finally:http.shutdown();http.server_close();thread.join()

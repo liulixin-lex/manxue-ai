@@ -94,8 +94,9 @@ function renderPromotion() {
 function renderState() {
   renderPromotion();
   const s = state.stats, config = state.settings;
-  $('rate').innerHTML = `${s.completed ? (s.passed / s.completed * 100).toFixed(1) : '—'}<small>%</small>`;
-  $('rate-note').textContent = s.completed ? `${s.passed} / ${s.completed} 次通过` : s.legacy ? `${s.legacy} 条历史记录` : '等待第一份检测结果';
+  const scored = s.passed + s.invalid;
+  $('rate').innerHTML = `${scored ? (s.passed / scored * 100).toFixed(1) : '—'}<small>%</small>`;
+  $('rate-note').textContent = scored ? `${s.passed} / ${scored} 次通过` : '暂无有效答题结果';
   $('total').innerHTML = `${s.total}<small>次</small>`;
   $('errors').innerHTML = `${s.errors + s.invalid}<small>次</small>`;
   $('error-note').textContent = `请求失败 ${s.errors} · 降智 ${s.invalid}`;
