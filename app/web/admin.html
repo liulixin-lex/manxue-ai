@@ -34,8 +34,9 @@
         </section>
 
         <section class="panel settings-panel admin-settings review-settings" aria-labelledby="review-title">
-          <div class="section-heading"><div><h2 id="review-title">视觉审核</h2><p>为站点定时检测和节点单次检测选择审核模型。</p></div></div>
-          <div class="admin-fields"><label for="review-mode">审核方式</label><select id="review-mode"><option value="self">同模型自评</option><option value="external">外部模型审核</option></select><p id="review-mode-note" class="field-note"></p>
+          <div class="section-heading"><div><h2 id="review-title">鹈鹕判定</h2><p>适用于站点定时检测和节点单次检测。</p></div></div>
+          <div class="admin-fields"><label class="toggle-row" for="review-enabled"><span><b>启用鹈鹕判定</b><small>关闭后只展示生成画面，不判通过或未通过</small></span><input type="checkbox" id="review-enabled" role="switch" aria-describedby="review-enabled-note" aria-controls="review-options"><span class="switch" aria-hidden="true"></span></label><p id="review-enabled-note" class="field-note" role="status"></p></div>
+          <div id="review-options" class="admin-fields"><label for="review-mode">审核方式</label><select id="review-mode"><option value="self">同模型自评</option><option value="external">外部模型审核</option></select><p id="review-mode-note" class="field-note"></p>
           <div id="external-review-fields" hidden><label for="review-provider">审核提供商</label><select id="review-provider"><option value="">选择提供商</option></select></div>
           <label for="review-effort">审核思考强度</label><select id="review-effort"><option value="inherit">沿用所选模型设置</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="xhigh">极高</option></select>
           <label for="review-format">审核输出协议</label><select id="review-format"><option value="auto">优先结构化输出，兼容不支持的接口</option><option value="json_schema">严格结构化输出</option><option value="prompt">提示词 JSON（兼容模式）</option></select>

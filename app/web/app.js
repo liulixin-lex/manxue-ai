@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const labels = {passed: '鹈鹕通过', invalid: '鹈鹕未通过', error: '执行异常', uncertain: '待复核', queued: '排队中', running: '检测中', legacy: '历史单项'};
+const labels = {passed: '鹈鹕通过', displayed: '仅展示', invalid: '鹈鹕未通过', error: '执行异常', uncertain: '待复核', queued: '排队中', running: '检测中', legacy: '历史单项'};
 const candyLabels = {passed:'成功',invalid:'降智',error:'请求失败',running:'检测中',queued:'排队中',not_run:'未检测'};
 const candyBadge = status => `<span class="badge candy-status ${escapeHTML(status)}">${candyLabels[status] || '未检测糖果'}</span>`;
 const escapeHTML = (value) => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -75,6 +75,7 @@ function qualityTag(tests = {}, corner = true) {
 
 function reviewDetail(tests = {}) {
   const review = tests.pelican?.review;
+  if (tests.pelican?.evaluation_level === 'display' || review?.status === 'skipped') return '<div class="review-detail"><strong>仅展示</strong><p>本轮未进行鹈鹕判定。</p></div>';
   if (!review) return tests.pelican ? '<p class="field-note">本记录尚无视觉审核结果。</p>' : '';
   if (review.manual_override?.status === 'passed') {
     const previous=review.previous_review;
@@ -94,10 +95,10 @@ function reviewDetail(tests = {}) {
 
 function testSummary(tests = {}, internal = true) {
   const names = {pelican:'鹈鹕',candy:'糖果'};
-  const statuses = {passed:'通过',invalid:'未通过',error:'执行异常',uncertain:'证据不足',queued:'排队中',running:'检测中',not_run:'未检测'};
+  const statuses = {passed:'通过',displayed:'仅展示',invalid:'未通过',error:'执行异常',uncertain:'证据不足',queued:'排队中',running:'检测中',not_run:'未检测'};
   const review = tests.pelican?.review;
   const reviewLabels = {passed:review?.manual_override?.status === 'passed' ? '手动通过' : review?.quality_gate?.status === 'passed' ? '主体与结构通过' : '主体通过',invalid:review?.quality_failures?.length ? '结构质量未通过' : '主体不符',error:'执行异常',uncertain:'待复核'};
-  return '<div class="test-results">' + Object.entries(tests).map(([name, result]) => `<span class="test-result ${escapeHTML(result.status)}">${names[name] || name} · ${name === 'pelican' && !internal && result.status === 'passed' ? '基础校验通过 · 未视觉审核' : statuses[result.status] || '未检测'}${result.attempts > 1 ? ` · 尝试 ${result.attempts} 次` : ''}</span>`).join('') + (internal && tests.pelican ? `<span class="test-result ${escapeHTML(review?.status || '')}">视觉审核 · ${reviewLabels[review?.status] || (tests.pelican.status === 'running' ? '待完成' : '未审核')}</span>` : '') + '</div>';
+  return '<div class="test-results">' + Object.entries(tests).map(([name, result]) => `<span class="test-result ${escapeHTML(result.status)}">${names[name] || name} · ${name === 'pelican' && !internal && result.status === 'passed' ? '基础校验通过 · 未视觉审核' : statuses[result.status] || '未检测'}${result.attempts > 1 ? ` · 尝试 ${result.attempts} 次` : ''}</span>`).join('') + (internal && tests.pelican && tests.pelican.evaluation_level !== 'display' ? `<span class="test-result ${escapeHTML(review?.status || '')}">视觉审核 · ${reviewLabels[review?.status] || (tests.pelican.status === 'running' ? '待完成' : '未审核')}</span>` : '') + '</div>';
 }
 function candyDetail(result, prompt, open = false) {
   if (!result) return '';
@@ -290,7 +291,7 @@ async function showDetail(id, kind = 'pelican') {
     }
     const pelican=r.tests?.pelican || {status:'not_run'};
     $('detail-title').textContent = `鹈鹕 · ${r.scene} · ${date(r.started)}`;
-    $('detail-body').innerHTML = `${r.has_svg ? '<img class="detail-image" id="detail-image" alt="模型生成的鹈鹕骑行 SVG 动画">' : ''}<div class="detail-meta">${badge(pelican.status)}<span>节点：${escapeHTML(r.node_name || '历史节点')}</span><span>${escapeHTML(r.model)} / ${escapeHTML(r.effort)}</span><span>${r.protocol === 'responses' ? 'Responses' : 'Chat Completions'}</span><span>${testDuration(r,'pelican')}</span><span>${r.source === 'manual' ? '手动检测' : '定时检测'} #${r.id}</span></div><div class="check-grid">${[['svg','SVG 格式'],['animation','动画声明'],['nonce','校验码']].map(([key,label]) => `<span class="${r.checks[key] ? '' : 'fail'}">${r.checks[key] ? '✓' : '—'} ${label}</span>`).join('')}<span>本轮校验码：${escapeHTML(r.nonce)}</span></div>${pelican.error ? `<p class="detail-error">${escapeHTML(pelican.error)}</p>` : ''}${testSummary({pelican})}<details><summary>本轮完整提示词</summary><pre>${escapeHTML((r.prompt || '').replace(/提示词版本[：:]\s*\d+[。.]?\s*/g,''))}</pre></details><details><summary>原始输出</summary><pre>${escapeHTML(pelican.output || r.output || '尚无输出')}</pre></details>${r.has_svg ? '<button class="button secondary" id="download-svg">下载 SVG 动画 ↓</button>' : ''}`;
+    $('detail-body').innerHTML = `${r.has_svg ? '<img class="detail-image" id="detail-image" alt="模型生成的鹈鹕骑行 SVG 动画">' : ''}<div class="detail-meta">${badge(pelican.status)}<span>节点：${escapeHTML(r.node_name || '历史节点')}</span><span>${escapeHTML(r.model)} / ${escapeHTML(r.effort)}</span><span>${r.protocol === 'responses' ? 'Responses' : 'Chat Completions'}</span><span>${testDuration(r,'pelican')}</span><span>${r.source === 'manual' ? '手动检测' : '定时检测'} #${r.id}</span></div><div class="check-grid" ${pelican.evaluation_level === 'display' ? 'hidden' : ''}>${[['svg','SVG 格式'],['animation','动画声明'],['nonce','校验码']].map(([key,label]) => `<span class="${r.checks[key] ? '' : 'fail'}">${r.checks[key] ? '✓' : '—'} ${label}</span>`).join('')}<span>本轮校验码：${escapeHTML(r.nonce)}</span></div>${pelican.error ? `<p class="detail-error">${escapeHTML(pelican.error)}</p>` : ''}${testSummary({pelican})}<details><summary>本轮完整提示词</summary><pre>${escapeHTML((r.prompt || '').replace(/提示词版本[：:]\s*\d+[。.]?\s*/g,''))}</pre></details><details><summary>原始输出</summary><pre>${escapeHTML(pelican.output || r.output || '尚无输出')}</pre></details>${r.has_svg ? '<button class="button secondary" id="download-svg">下载 SVG 动画 ↓</button>' : ''}`;
     if (r.has_svg) {
       const frame = document.createElement('div');
       frame.className = 'review-image';
@@ -350,7 +351,7 @@ async function refresh(reset = false, expand = false) {
     records=[...new Map(pages.flatMap(page=>page.items).map(r=>[r.id,r])).values()];
     renderState();renderGallery(expand);
     const v=state.visual_stats;
-    if(v) $('visual-stats').textContent=`当前节点 · 24 小时内 ${v.total} 次，${v.passed} 次通过${v.invalid ? '，'+v.invalid+' 次未通过' : ''}${v.uncertain ? '，'+v.uncertain+' 次待复核' : ''}${v.errors ? '，'+v.errors+' 次异常' : ''}`;
+    if(v) $('visual-stats').textContent=`${state.settings.review_enabled === false ? '仅展示模式 · ' : ''}当前节点 · 24 小时内 ${v.total} 次，${v.passed} 次通过${v.displayed ? '，'+v.displayed+' 次仅展示' : ''}${v.invalid ? '，'+v.invalid+' 次未通过' : ''}${v.uncertain ? '，'+v.uncertain+' 次待复核' : ''}${v.errors ? '，'+v.errors+' 次异常' : ''}`;
     $('gallery-loading').hidden=true;$('sync-error').hidden=true;
     $('connection').textContent=state.candy_running ? '正在检测' : state.settings.enabled ? '自动检测已启用' : '自动检测已暂停';
     $('connection').className='connection online';

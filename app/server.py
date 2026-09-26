@@ -37,7 +37,7 @@ MAX_STREAM_RESPONSE = 16 * 1024 * 1024
 DEFAULTS = dict(base_url="https://api.example.com/v1", model="gpt-6-astra",
                 effort="medium", protocol="responses", api_key="", enabled=False, next_run=None,
                 interval_minutes=30, timeout_seconds=300, max_output_tokens=16000, guest_enabled=True, retry_count=2, review_timeout_seconds=240, review_effort="inherit", review_format="auto", judge_node_id=None,
-                review_mode="self", review_provider_id=None, promotion_enabled=False,
+                review_enabled=True, review_mode="self", review_provider_id=None, promotion_enabled=False,
                 promotion_title="GGUUAI API", promotion_description="", promotion_url="", promotion_action="访问中转站")
 NODE_FIELDS = ("base_url", "api_key", "model", "effort", "protocol")
 PROVIDER_FIELDS = (*NODE_FIELDS, "token_field")
@@ -185,7 +185,7 @@ def validate_settings(values, old):
         raise ValueError("思考强度或接口协议不正确")
     if any(ord(c) < 32 or ord(c) > 126 for c in new["api_key"]):
         raise ValueError("API Key 格式不正确")
-    for key in ("enabled", "guest_enabled", "promotion_enabled"):
+    for key in ("enabled", "guest_enabled", "promotion_enabled", "review_enabled"):
         if key in values:
             if not isinstance(values[key], bool):
                 raise ValueError("开关必须为布尔值")
@@ -676,6 +676,7 @@ def perform_test(config, prompt, nonce, model_call, kind="pelican", on_progress=
     output, svg, checks, usage, returned_model = "", "", {}, {}, ""
     review, error_code, stage = None, None, 'generation'
     config = dict(config, _nonce=nonce)
+    display_only = kind == 'pelican' and not config.get('_guest') and not config.get('review_enabled', True)
     if '_deadline' not in config:
         config['_deadline'] = time.monotonic() + config['timeout_seconds'] + 45 + config.get('review_timeout_seconds',240)
     def snapshot(status, message='', current_stage=None):
@@ -686,7 +687,7 @@ def perform_test(config, prompt, nonce, model_call, kind="pelican", on_progress=
             attempts=len(attempts_log), attempts_log=list(attempts_log), output=output, svg=svg,
             checks=checks, error=redact(redact(message,config),config.get('_judge',{}))[:1000], error_code=error_code,
             stage=current_stage or stage, usage=safe_usage, returned_model=redact(returned_model,config)[:200],
-            review=review, evaluation_level='basic' if config.get('_guest') else 'visual', scoring_version=3)
+            review=review, evaluation_level='display' if display_only else 'basic' if config.get('_guest') else 'visual', scoring_version=3)
     def evidence_progress(metadata):
         nonlocal review
         review = {'status':'running','checks':{},'render':metadata,'version':REVIEW_VERSION}
@@ -703,7 +704,14 @@ def perform_test(config, prompt, nonce, model_call, kind="pelican", on_progress=
         else:
             svg,checks,message = inspect_svg(output,nonce)
         status = 'passed' if all(checks.values()) else 'invalid'
-        if kind == 'pelican' and status == 'passed' and not config.get('_guest'):
+        if display_only:
+            review = dict(status='skipped', reason='仅展示，未进行鹈鹕判定', checks={}, version=REVIEW_VERSION)
+            if svg:
+                status, message, stage = 'displayed', '', 'display'
+            else:
+                status, error_code = 'error', 'svg_unavailable'
+                message = '画面无法展示：' + message
+        elif kind == 'pelican' and status == 'passed' and not config.get('_guest'):
             stage = 'render'
             if on_progress:
                 on_progress(snapshot('running'))
@@ -756,7 +764,7 @@ def guest_error(message):
 
 def combine_tests(results):
     statuses = [r["status"] for r in results.values()]
-    status = next((s for s in ("running", "error", "invalid", "uncertain") if s in statuses), "passed")
+    status = next((s for s in ("running", "error", "invalid", "uncertain", "displayed") if s in statuses), "passed")
     pelican = results.get("pelican", {})
     usage = {}
     for result in results.values():
@@ -866,7 +874,7 @@ class Monitor:
                     continue
                 try:
                     result = json.loads(path.read_text())
-                    if result['status'] not in ('passed','invalid','uncertain','error'):
+                    if result['status'] not in ('passed','invalid','uncertain','error','displayed'):
                         continue
                     self.write_result(db,int(path.stem),result)
                     restored.append(path)
@@ -1001,6 +1009,8 @@ class Monitor:
     @staticmethod
     def resolve_judge(db, config):
         config.pop('_judge', None)
+        if not config.get('review_enabled', True):
+            return
         if config.get('review_mode', 'self') == 'external':
             judge = db.execute('SELECT * FROM review_providers WHERE id=?', (config.get('review_provider_id'),)).fetchone()
             if not judge or not judge['api_key']:
@@ -1285,14 +1295,16 @@ class Monitor:
             self.render_health = {'status':'error','checked_at':time.time(),'error_code':diagnose(exc,'render').code}
 
     def health(self):
+        review_enabled = True
         try:
             with self.db() as db:
-                db.execute('SELECT 1').fetchone()
+                saved = db.execute('SELECT value FROM settings WHERE id=1').fetchone()
+                review_enabled = json.loads(saved[0]).get('review_enabled', True)
             database = True
         except sqlite3.Error:
             database = False
         scheduler = time.monotonic()-self.scheduler_heartbeat < 30
-        return dict(ready=database and scheduler and self.render_health['status']=='passed' and not self.pending_failures and not self.pending_results,
+        return dict(ready=database and scheduler and (not review_enabled or self.render_health['status']=='passed') and not self.pending_failures and not self.pending_results,
                     database=database,scheduler=scheduler,renderer=self.render_health,
                     recovery_pending=len(self.pending_failures)+len(self.pending_results))
 
@@ -1447,7 +1459,7 @@ class Monitor:
         return [self.serialize(row) for row in rows]
 
     def gallery(self, page=1, status="all", test="all"):
-        if type(page) is not int or not 1 <= page <= 1000000 or status not in ("all","passed","invalid","error","uncertain","running","legacy"):
+        if type(page) is not int or not 1 <= page <= 1000000 or status not in ("all","passed","invalid","error","uncertain","running","legacy","displayed"):
             raise ValueError("画廊分页或筛选参数无效")
         if test not in ("all","pelican","candy"):
             raise ValueError("检测项目无效")
@@ -1508,13 +1520,14 @@ class Monitor:
         current = [r for r in results if r["test_version"] >= 3 and r["candy_status"] != "not_run"]
         completed = [r for r in current if r["candy_status"] != "running"]
         settings = self.settings(public=True)
-        public = {key: settings[key] for key in ("base_url", "model", "effort", "enabled", "next_run", "interval_minutes", "guest_enabled", "node_name", "active_node_id")}
+        public = {key: settings[key] for key in ("base_url", "model", "effort", "enabled", "next_run", "interval_minutes", "guest_enabled", "node_name", "active_node_id", "review_enabled")}
         promotion = {key.removeprefix('promotion_'): settings[key] for key in
                      ('promotion_title', 'promotion_description', 'promotion_action', 'promotion_url')} if settings['promotion_enabled'] else None
         pelican_runs = [r for r in results if r['test_version'] >= 3 and r['tests'].get('pelican')]
         pelicans = [r['tests']['pelican'] for r in pelican_runs]
         visual = [t for t in pelicans if t.get('review')]
         visual_stats = dict(total=len(pelicans), generated=sum(r['has_svg'] for r in pelican_runs),
+            displayed=sum(t.get('status')=='displayed' for t in pelicans),
             reviewed=sum(t['review']['status'] in ('passed','invalid','uncertain') for t in visual),
             passed=sum(t['review']['status']=='passed' for t in visual),
             invalid=sum(t['review']['status']=='invalid' for t in visual),

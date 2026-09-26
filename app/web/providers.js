@@ -1,14 +1,19 @@
 let providers = [], editingProvider = null, pendingProviderSelection = null;
 function showReviewSettings(data) {
+  $('review-enabled').checked = data.review_enabled !== false;
   $('review-mode').value = data.review_mode || 'self';
   pendingProviderSelection = data.review_provider_id ? String(data.review_provider_id) : '';
   $('review-provider').value = pendingProviderSelection;
   updateReviewMode();
 }
 function updateReviewMode() {
+  const enabled = $('review-enabled').checked;
   const external = $('review-mode').value === 'external';
+  $('review-options').hidden = !enabled;
+  for (const id of ['review-mode','review-provider','review-effort','review-format','review-timeout']) $(id).disabled = !enabled;
+  $('review-enabled-note').textContent = enabled ? '保存后，新检测将进行鹈鹕判定。' : '保存后，新画面标为「仅展示」，不调用审核模型；请求失败仍会提示，糖果题照常判定。';
   $('external-review-fields').hidden = !external;
-  $('review-provider').required = external;
+  $('review-provider').required = enabled && external;
   $('review-mode-note').textContent = external ? '将生成画面的截图交给所选外部模型审核。' : '由本轮生成模型读取截图并按统一标准自评。';
 }
 function renderProviders() {
@@ -57,6 +62,7 @@ function clearProviders() {
   $('provider-list').replaceChildren(); $('review-provider').replaceChildren(new Option('选择提供商',''));
 }
 $('review-mode').addEventListener('change', updateReviewMode);
+$('review-enabled').addEventListener('change', updateReviewMode);
 $('provider-protocol').addEventListener('change', () => $('provider-token-row').hidden = $('provider-protocol').value !== 'chat');
 $('add-provider').addEventListener('click', () => editProvider());
 $('provider-cancel').addEventListener('click', closeProviderEditor);
