@@ -124,7 +124,7 @@ class ReviewPolicyTests(unittest.TestCase):
         def call(config,prompt):
             configs.append(dict(config));prompts.append(json.dumps(prompt))
             return ('bad' if len(configs)==1 else json.dumps(verdict())),{},'fake'
-        result=vr.review_bundle(dict(server.DEFAULTS,_save_review_receipt=lambda *args:receipts.append(args)),self.bundle,call)
+        result=vr.review_bundle(dict(server.DEFAULTS,quality_gate=False,_save_review_receipt=lambda *args:receipts.append(args)),self.bundle,call)
         self.assertEqual('passed',result['status']);self.assertEqual(2,len(configs))
         self.assertEqual(configs[0]['_stage_deadline'],configs[1]['_stage_deadline'])
         self.assertEqual(2,len(receipts));self.assertEqual([1,2],[a['attempt'] for a in result['attempts']])
@@ -134,7 +134,7 @@ class ReviewPolicyTests(unittest.TestCase):
     def test_advisory_failure_preserved_without_extra_requests(self):
         data=verdict();data['checks']['scene']=False
         call=Mock(return_value=(json.dumps(data),{},'fake'))
-        result=vr.review_bundle(server.DEFAULTS,self.bundle,call)
+        result=vr.review_bundle(dict(server.DEFAULTS,quality_gate=False),self.bundle,call)
         self.assertEqual('passed',result['status']);self.assertEqual(1,call.call_count)
         self.assertFalse(result['checks']['scene'])
 
@@ -144,13 +144,13 @@ class ReviewPolicyTests(unittest.TestCase):
             seen.append(dict(config))
             if '_output_schema' in config:raise StageError('request','structured_unsupported','unsupported')
             return json.dumps(verdict()),{},'fake'
-        result=vr.review_bundle(server.DEFAULTS,self.bundle,call)
+        result=vr.review_bundle(dict(server.DEFAULTS,quality_gate=False),self.bundle,call)
         self.assertEqual('passed',result['status']);self.assertEqual(2,len(seen))
         self.assertEqual(seen[0]['_stage_deadline'],seen[1]['_stage_deadline'])
-        with self.assertRaises(StageError):vr.review_bundle(dict(server.DEFAULTS,review_format='json_schema'),self.bundle,call)
+        with self.assertRaises(StageError):vr.review_bundle(dict(server.DEFAULTS,quality_gate=False,review_format='json_schema'),self.bundle,call)
 
     def test_receipt_disk_error_does_not_erase_valid_review(self):
-        result=vr.review_bundle(dict(server.DEFAULTS,_save_review_receipt=Mock(side_effect=OSError())),self.bundle,
+        result=vr.review_bundle(dict(server.DEFAULTS,quality_gate=False,_save_review_receipt=Mock(side_effect=OSError())),self.bundle,
                                 lambda *args:(json.dumps(verdict()),{},'fake'))
         self.assertEqual('passed',result['status']);self.assertFalse(result['receipts'][0]['saved'])
 

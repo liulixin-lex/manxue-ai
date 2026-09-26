@@ -27,7 +27,8 @@ class SubjectPolicyTests(unittest.TestCase):
 
     def review(self,*values,config=None,bundle=None):
         call=Mock(side_effect=[(json.dumps(v),{'total_tokens':10},'judge') if isinstance(v,dict) else v for v in values])
-        result=vr.review_bundle(config or server.DEFAULTS,bundle or self.bundle,call)
+        base = dict(server.DEFAULTS, quality_gate=False) if config is None else config
+        result=vr.review_bundle(base,bundle or self.bundle,call)
         return result,call
 
     def test_every_advisory_can_fail_or_be_unknown_without_veto(self):
@@ -84,6 +85,81 @@ class SubjectPolicyTests(unittest.TestCase):
             self.assertEqual('disagreement',result['confirmation']['status'])
             self.assertEqual([],result['confirmed_failures'])
             self.assertEqual(2,call.call_count)
+
+    def test_quality_gate_rejects_malformed_recognizable_scene(self):
+        result,call=self.review(verdict(),verdict(bicycle=False,riding=False),
+                                config=dict(server.DEFAULTS, quality_gate=True))
+        self.assertEqual('invalid',result['status'])
+        self.assertEqual(['bicycle','riding'],result['quality_failures'])
+        self.assertEqual('quality_rejected',result['confirmation']['status'])
+        self.assertEqual(2,call.call_count)
+        self.assertEqual(['initial','quality_gate'],[a['purpose'] for a in result['attempts']])
+
+    def test_quality_gate_unknown_never_becomes_pass(self):
+        result,call=self.review(verdict(),verdict(bicycle=None,riding=None),
+                                config=dict(server.DEFAULTS, quality_gate=True))
+        self.assertEqual('uncertain',result['status'])
+        self.assertEqual('quality_uncertain',result['confirmation']['status'])
+        self.assertEqual(2,call.call_count)
+
+    def test_quality_gate_runs_after_core_disagreement(self):
+        result,call=self.review(
+            verdict(riding=False),
+            verdict(riding=True),
+            verdict(bicycle=False,riding=False),
+            config=dict(server.DEFAULTS, quality_gate=True))
+        self.assertEqual('invalid',result['status'])
+        self.assertEqual(['bicycle','riding'],result['quality_failures'])
+        self.assertEqual('quality_rejected',result['confirmation']['status'])
+        self.assertEqual(3,call.call_count)
+        self.assertEqual(['initial','confirm_core','quality_gate'],[a['purpose'] for a in result['attempts']])
+
+    def test_quality_pass_cannot_erase_recognition_disagreement(self):
+        result,_=self.review(verdict(riding=False),verdict(),verdict(),config=server.DEFAULTS)
+        self.assertEqual('uncertain',result['status'])
+        self.assertIsNone(result['checks']['riding'])
+        self.assertEqual('passed',result['quality_gate']['status'])
+
+    def test_quality_requires_multiple_distinct_frames_for_pass(self):
+        for indices in ([0],[0,0]):
+            data=verdict();data['evidence']['bicycle']=indices
+            result,_=self.review(verdict(),data,config=server.DEFAULTS)
+            self.assertEqual('uncertain',result['status'])
+            self.assertIsNone(result['checks']['bicycle'])
+
+    def test_quality_transport_and_schema_failure_never_pass(self):
+        for failure in (StageError('review','http_524','timeout',True),('bad',{},'judge')):
+            result,call=self.review(verdict(),failure,config=server.DEFAULTS)
+            self.assertEqual('uncertain',result['status'])
+            self.assertEqual('unavailable',result['quality_gate']['status'])
+            self.assertTrue(result['assessments'][0]['checks']['bicycle'])
+            self.assertEqual(2,call.call_count)
+
+    def test_quality_observation_has_slot_without_transient_retries(self):
+        seen=[]
+        def call(config,prompt):
+            seen.append((dict(config),copy.deepcopy(prompt)))
+            return json.dumps(verdict()),{},'judge'
+        result=vr.review_bundle(dict(server.DEFAULTS,retry_count=0),self.bundle,call)
+        self.assertEqual('passed',result['status'])
+        self.assertEqual(2,len(seen))
+        self.assertEqual(seen[0][0]['_stage_deadline'],seen[1][0]['_stage_deadline'])
+        self.assertEqual(seen[0][1][1:],seen[1][1][1:])
+        self.assertEqual(vr.QUALITY_PROMPT,seen[1][0]['_system_prompt'])
+        self.assertEqual(0,seen[1][0]['retry_count'])
+
+    def test_quality_does_not_overrun_attempts_after_disagreement(self):
+        result,call=self.review(verdict(riding=False),verdict(),
+                                config=dict(server.DEFAULTS,retry_count=1))
+        self.assertEqual('uncertain',result['status'])
+        self.assertEqual('unavailable',result['quality_gate']['status'])
+        self.assertEqual(2,call.call_count)
+
+    def test_quality_rejection_invalidates_dependent_positive_checks(self):
+        result,_=self.review(verdict(),verdict(bicycle=False),config=server.DEFAULTS)
+        self.assertEqual('invalid',result['status'])
+        self.assertIsNone(result['checks']['riding'])
+        self.assertIsNone(result['checks']['motion'])
 
     def test_confirmed_absent_bicycle_cannot_have_confirmed_riding(self):
         result,_=self.review(verdict(bicycle=False),verdict(bicycle=False))
@@ -147,7 +223,7 @@ class PolicyMigrationTests(unittest.TestCase):
     def test_advisory_reclassification_retains_original_and_is_idempotent(self):
         original=self.legacy(loop=False);before=copy.deepcopy(original)
         result=vr.reassess_legacy_review(original)
-        self.assertEqual('passed',result['status'])
+        self.assertEqual('uncertain',result['status'])
         self.assertEqual(before,result['previous_review'])
         self.assertEqual(before,original)
         self.assertEqual('retained_observations',result['policy_reassessment']['method'])
@@ -159,6 +235,29 @@ class PolicyMigrationTests(unittest.TestCase):
         self.assertEqual([],result['confirmed_failures'])
         self.assertIsNone(result['checks']['riding'])
         self.assertFalse(result['previous_review']['checks']['riding'])
+
+    def test_v4_pass_is_not_retained_without_quality_evidence(self):
+        legacy=self.legacy()
+        legacy['version']=4;legacy['status']='passed'
+        result=vr.reassess_legacy_review(legacy)
+        self.assertEqual('uncertain',result['status'])
+        self.assertEqual('legacy_not_run',result['quality_gate']['status'])
+        self.assertEqual('legacy_not_confirmed',result['confirmation']['status'])
+        self.assertEqual(legacy,result['previous_review'])
+
+    def test_every_legacy_version_requires_fresh_quality_evidence(self):
+        for version in range(1,vr.REVIEW_VERSION):
+            legacy=dict(self.legacy(),version=version,status='passed')
+            result=vr.reassess_legacy_review(legacy)
+            self.assertEqual('uncertain',result['status'])
+            self.assertEqual('legacy_not_run',result['quality_gate']['status'])
+
+    def test_v4_confirmed_subject_failure_is_retained(self):
+        legacy=dict(self.legacy(bicycle=False,riding=False),version=4,
+                    confirmed_failures=['bicycle','riding'])
+        result=vr.reassess_legacy_review(legacy)
+        self.assertEqual('invalid',result['status'])
+        self.assertEqual(['bicycle','riding'],result['confirmed_failures'])
 
     def test_execution_errors_and_missing_observations_are_untouched(self):
         for review in (None,{},dict(self.legacy(),status='error'),{'status':'passed','version':1,'checks':{}}):
@@ -182,7 +281,7 @@ class PolicyMigrationTests(unittest.TestCase):
                     self.assertEqual(nodes,[tuple(row) for row in db.execute('SELECT * FROM nodes')])
                 revised=json.loads(row['tests'])
                 self.assertEqual('invalid',row['status'])
-                self.assertEqual('passed',revised['pelican']['status'])
+                self.assertEqual('uncertain',revised['pelican']['status'])
                 self.assertEqual(candy,revised['candy'])
                 self.assertEqual(tests['pelican']['review'],revised['pelican']['review']['previous_review'])
                 self.assertEqual('original output',row['output'])

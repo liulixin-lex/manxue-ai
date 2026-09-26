@@ -92,7 +92,7 @@ class PromptVariationTests(unittest.TestCase):
                 self.assertIn('鹈鹕',prompt);self.assertIn('自行车',prompt)
                 generated.add(prompt)
         self.assertEqual(24,len(generated))
-        self.assertEqual(4,server.REVIEW_VERSION)
+        self.assertEqual(5,server.REVIEW_VERSION)
 
     def test_exact_prompt_saved_and_recent_scenes_not_repeated(self):
         with tempfile.TemporaryDirectory() as directory:

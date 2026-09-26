@@ -159,7 +159,7 @@ class ReviewTests(unittest.TestCase):
             seen.append(config['model']);return json.dumps(self.verdict()),{},'returned-judge'
         with patch.object(visual_review,'render_evidence',return_value=bundle):
             result=visual_review.review_pelican(config,SVG,call)
-        self.assertEqual(['independent'],seen)
+        self.assertEqual(['independent','independent'],seen)
         self.assertEqual('independent',result['judge_mode'])
         self.assertEqual('returned-judge',result['returned_model'])
 
