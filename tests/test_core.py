@@ -134,7 +134,7 @@ class ReviewTests(unittest.TestCase):
             if failure=='type':value['checks']['motion']='true'
             with self.subTest(failure=failure):
                 result = visual_review.parse_review(json.dumps(value))
-                self.assertEqual('invalid' if failure == 'contradiction' else 'uncertain',result['status'])
+                self.assertEqual('uncertain' if failure in ('missing','contradiction') else 'passed',result['status'])
                 self.assertTrue(result['checks']['pelican'])
                 self.assertTrue(result['checks']['scene'])
                 self.assertTrue(result['schema_warnings'])
@@ -147,7 +147,9 @@ class ReviewTests(unittest.TestCase):
 
     def test_unknown_remains_unknown(self):
         value=self.verdict();value['checks']['motion']=None;value['evidence']['motion']=[]
-        self.assertEqual('uncertain',visual_review.parse_review(json.dumps(value))['status'])
+        result=visual_review.parse_review(json.dumps(value))
+        self.assertEqual('passed',result['status'])
+        self.assertIsNone(result['checks']['motion'])
 
     def test_independent_judge_config(self):
         bundle={'frames':[{'time':0,'png':'eA=='}]*12,'metadata':{'unique_frames':2,'sampling_limited':False}}

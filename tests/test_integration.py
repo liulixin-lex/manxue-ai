@@ -68,6 +68,19 @@ class EndToEndTests(unittest.TestCase):
                     page.wait_for_selector('.evidence-grid',state='attached')
                     self.assertGreaterEqual(page.locator('.evidence-grid img').count(),12)
                     self.assertNotIn('降智',page.locator('body').inner_text())
+                    self.assertIn('主体识别 v4',page.locator('.review-detail').inner_text())
+                    self.assertIn('细节观察（不否决主体）',page.locator('.review-detail').inner_text())
+                    self.assertEqual(0,page.locator('.quality-corner').count())
+                    for tests in ({'candy':{'status':'invalid'},'pelican':{'status':'passed'}},
+                                  {'pelican':{'status':'invalid','review':{'status':'invalid','version':3}}},
+                                  {'pelican':{'review':{'status':'uncertain','version':4}}}):
+                        self.assertEqual('',page.evaluate('tests => qualityTag(tests)',tests))
+                    confirmed={'pelican':{'review':{'status':'invalid','version':4,
+                               'confirmed_failures':['pelican'],'reason':'主体不符'}}}
+                    self.assertIn('AI 复核：主体不符',page.evaluate('tests => qualityTag(tests)',confirmed))
+                    page.set_viewport_size({'width':390,'height':844})
+                    self.assertTrue(page.locator('.review-detail').is_visible())
+                    self.assertTrue(page.evaluate('document.documentElement.scrollWidth <= innerWidth'))
                     page.goto(f'http://127.0.0.1:{http.server_port}/admin')
                     page.wait_for_selector('#auth-dialog[open]')
                     self.assertFalse(errors,errors)

@@ -45,11 +45,13 @@ class RecoveryStreamTests(unittest.TestCase):
         self.assertTrue(result['_transport']['response_completed'])
         self.assertEqual(1,len(result['output']))
 
-    def test_finalized_invalid_and_uncertain_verdicts_keep_their_meaning(self):
-        for status,value in (('invalid',False),('uncertain',None)):
+    def test_recovered_advisory_observations_keep_their_meaning(self):
+        for value in (False,None):
             data=verdict();data['checks']['scene']=value
             result=self.read(done(data))
-            self.assertEqual(status,vr.parse_review(result['output'][0]['content'][0]['text'])['status'])
+            parsed=vr.parse_review(result['output'][0]['content'][0]['text'])
+            self.assertEqual('passed',parsed['status'])
+            self.assertIs(value,parsed['checks']['scene'])
 
     def test_generation_partial_refusal_and_failed_review_never_recover(self):
         cases=[([done()],0),
@@ -114,7 +116,8 @@ class ReviewPolicyTests(unittest.TestCase):
         data=verdict();data['checks']['loop']=None
         result=vr.parse_review(json.dumps(data))
         self.assertEqual(['loop'],result['pending_checks'])
-        self.assertEqual('尚不能确认：循环连续性',result['reason'])
+        self.assertEqual('passed',result['status'])
+        self.assertEqual('loop',result['advisories'][0]['check'])
 
     def test_schema_repair_once_same_frames_shared_deadline(self):
         configs=[];prompts=[];receipts=[]
@@ -128,11 +131,12 @@ class ReviewPolicyTests(unittest.TestCase):
         self.assertEqual([p['image_url'] for p in json.loads(prompts[0]) if p['type']=='input_image'],
                          [p['image_url'] for p in json.loads(prompts[1]) if p['type']=='input_image'])
 
-    def test_never_retry_content_failure_to_get_a_pass(self):
+    def test_advisory_failure_preserved_without_extra_requests(self):
         data=verdict();data['checks']['scene']=False
         call=Mock(return_value=(json.dumps(data),{},'fake'))
         result=vr.review_bundle(server.DEFAULTS,self.bundle,call)
-        self.assertEqual('invalid',result['status']);self.assertEqual(1,call.call_count)
+        self.assertEqual('passed',result['status']);self.assertEqual(1,call.call_count)
+        self.assertFalse(result['checks']['scene'])
 
     def test_unsupported_schema_falls_back_once_within_budget(self):
         seen=[]

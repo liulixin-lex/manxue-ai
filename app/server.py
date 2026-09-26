@@ -24,7 +24,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib import error, parse, request
 import xml.etree.ElementTree as ET
-from visual_review import review_pelican, parse_review
+from visual_review import review_pelican, parse_review, reassess_legacy_review, REVIEW_VERSION
 from reliability import StageError, diagnose, event, remaining, request_with_retries
 from artifacts import save_evidence, prune_evidence, atomic_write
 
@@ -594,7 +594,7 @@ def perform_test(config, prompt, nonce, model_call, kind="pelican", on_progress=
             review=review, evaluation_level='basic' if config.get('_guest') else 'visual', scoring_version=3)
     def evidence_progress(metadata):
         nonlocal review
-        review = {'status':'running','checks':{},'render':metadata,'version':3}
+        review = {'status':'running','checks':{},'render':metadata,'version':REVIEW_VERSION}
         if on_progress:
             on_progress(snapshot('running',current_stage='review'))
     config['_evidence_progress'] = evidence_progress
@@ -614,7 +614,8 @@ def perform_test(config, prompt, nonce, model_call, kind="pelican", on_progress=
                 on_progress(snapshot('running'))
             try:
                 review = review_pelican(config,svg,model_call)
-                stage, status, message = 'review', review['status'], review['reason']
+                stage, status = 'review', review['status']
+                message = '' if status == 'passed' else review['reason']
                 if 'returned_model' in review:
                     review['returned_model'] = redact(redact(review['returned_model'],config),config.get('_judge',{}))[:200]
                 if 'judge_model' in review:
@@ -626,7 +627,7 @@ def perform_test(config, prompt, nonce, model_call, kind="pelican", on_progress=
                 details = dict(review or {})
                 details.update(getattr(exc,'review_details',{}))
                 review = dict(details, status='error',checks={},reason=message,
-                              error_code=error_code, stage=stage, version=3)
+                              error_code=error_code, stage=stage, version=REVIEW_VERSION)
                 status = 'error'
     except Exception as exc:
         failure = diagnose(exc,stage)
@@ -775,11 +776,36 @@ class Monitor:
                     if test["status"] == "running":
                         test.update(status="error", finished=time.time(), error="服务重启，本项检测中断")
                 db.execute("UPDATE runs SET status='error', finished=?, error='服务重启，上一轮检测中断；未自动重试',tests=? WHERE id=?", (time.time(), json.dumps(tests), row["id"]))
+            self.migrate_review_policy(db)
         with contextlib.closing(sqlite3.connect(self.path, timeout=10)) as db:
             db.execute('PRAGMA journal_mode=WAL')
         os.chmod(self.path, 0o600)
         for path in restored:
             path.unlink(missing_ok=True)
+
+    @staticmethod
+    def migrate_review_policy(db):
+        changed = 0
+        for row in db.execute("SELECT id,tests FROM runs WHERE status!='running' AND test_version=3").fetchall():
+            tests = json.loads(row['tests'])
+            pelican = tests.get('pelican',{})
+            if pelican.get('status') not in ('passed','invalid','uncertain'):
+                continue
+            revised = reassess_legacy_review(pelican.get('review'))
+            if revised is None:
+                continue
+            pelican.update(review=revised,status=revised['status'],stage='review',error_code=None,
+                           error='' if revised['status']=='passed' else revised['reason'])
+            statuses = [test['status'] for test in tests.values()]
+            status = next((value for value in ('running','error','invalid','uncertain') if value in statuses),'passed')
+            error = '；'.join(('鹈鹕：' if name=='pelican' else '糖果：')+test['error']
+                             for name,test in tests.items() if test.get('error'))
+            db.execute('UPDATE runs SET status=?,error=?,tests=? WHERE id=?',
+                       (status,error,json.dumps(tests),row['id']))
+            changed += 1
+        if changed:
+            event('review','policy_reclassified',count=changed,version=REVIEW_VERSION)
+        return changed
 
     def password_configured(self):
         with self.db() as db:
@@ -1290,7 +1316,7 @@ class Monitor:
             invalid=sum(t['review']['status']=='invalid' for t in visual),
             uncertain=sum(t['review']['status']=='uncertain' for t in visual),
             errors=sum(t.get('status')=='error' for t in pelicans))
-        return dict(settings=public, server_time=now, visual_stats=visual_stats, scoring_version=3,
+        return dict(settings=public, server_time=now, visual_stats=visual_stats, scoring_version=3, review_policy_version=REVIEW_VERSION,
                     running=running[0] if running else None, candy_running=any(r["candy_status"]=="running" for r in current), timeline=results,
                     stats=dict(total=len(current), legacy=len(results)-len(current), passed=sum(r["candy_status"] == "passed" for r in completed),
                                completed=len(completed), errors=sum(r["candy_status"] == "error" for r in completed),

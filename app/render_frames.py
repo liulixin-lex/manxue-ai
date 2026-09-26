@@ -7,7 +7,7 @@ import sys
 from playwright.sync_api import sync_playwright
 from server import inspect_svg, MAX_RESPONSE
 
-RENDER_VERSION = 2
+RENDER_VERSION = 3
 FRACTIONS = (0, .07, .17, .23, .31, .43, .51, .61, .73, .83, .93, 1)
 MAX_FRAMES = 16
 
@@ -77,14 +77,15 @@ def capture(svg):
             const records = [...svg.querySelectorAll('animate,animateTransform,animateMotion')].map(a => {
                 let duration = null;
                 try { duration = a.getSimpleDuration(); } catch {}
-                return {kind:'smil', begin:clock(a.getAttribute('begin')), duration};
+                return {kind:'smil', begin:clock(a.getAttribute('begin')), duration,
+                    repeating:a.getAttribute('repeatCount') === 'indefinite' && (!a.getAttribute('repeatDur') || a.getAttribute('repeatDur') === 'indefinite')};
             });
             document.getAnimations().forEach(a => {
                 a.pause();
                 const t = a.effect.getTiming();
                 records.push({kind:'css', begin:t.delay / 1000,
                     duration:typeof t.duration === 'number' ? t.duration / 1000 : null,
-                    alternate:t.direction.startsWith('alternate')});
+                    alternate:t.direction.startsWith('alternate'), repeating:t.iterations === Infinity});
             });
             return records;
         }""")

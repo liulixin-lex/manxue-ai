@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const labels = {passed: '双项通过', invalid: '校验未通过', error: '执行异常', uncertain: '证据不足', queued: '排队中', running: '检测中', legacy: '历史单项'};
+const labels = {passed: '双项通过', invalid: '有单项未通过', error: '执行异常', uncertain: '待复核', queued: '排队中', running: '检测中', legacy: '历史单项'};
 const candyLabels = {passed:'糖果通过',invalid:'糖果未通过',error:'糖果请求失败',running:'糖果检测中',not_run:'未检测糖果'};
 const candyBadge = status => `<span class="badge ${escapeHTML(status)}">${candyLabels[status] || '未检测糖果'}</span>`;
 const escapeHTML = (value) => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -23,26 +23,32 @@ function message(text, isError = false) {
 function badge(status) { return `<span class="badge ${escapeHTML(status)}">${escapeHTML(labels[status] || '尚未检测')}</span>`; }
 
 function qualityTag(tests = {}, corner = true) {
-  const reasons = [];
-  if (tests.pelican?.review?.status === 'invalid') reasons.push('鹈鹕视觉审核未通过');
-  if (tests.candy?.status === 'invalid') reasons.push('糖果答案未通过');
-  if (!reasons.length) return '';
-  return `<span class="${corner ? 'quality-corner' : 'quality-flag'}" title="${reasons.join('；')}" aria-label="内容校验未通过：${reasons.join('；')}"><span>内容校验未通过</span></span>`;
+  const review = tests.pelican?.review;
+  // Candy answers and unconfirmed visual opinions cannot veto the picture.
+  if (review?.status !== 'invalid' || (review.version || 0) < 4 || !review.confirmed_failures?.length) return '';
+  const reason = escapeHTML(review.reason || '核心画面与要求不符，查看审核证据');
+  return `<span class="${corner ? 'quality-corner' : 'quality-flag'}" title="${reason}" aria-label="AI 复核：主体不符。${reason}"><span>AI 复核：主体不符</span></span>`;
 }
 
 function reviewDetail(tests = {}) {
   const review = tests.pelican?.review;
   if (!review) return tests.pelican ? '<p class="field-note">本记录尚无视觉审核结果。</p>' : '';
-  const names = {pelican:'鹈鹕形态',bicycle:'自行车结构',riding:'脚与踏板接触',motion:'骑行动作',scene:'场景',nonce_visible:'可见校验码',loop:'循环连续性'};
-  const checks = Object.entries(review.checks || {}).map(([key,value]) => `${names[key] || key}：${value === true ? '通过' : value === false ? '未通过' : '无法判断'}`);
-  return `<div class="review-detail"><strong>视觉审核${review.judge_mode === 'independent' ? ' · 独立裁判' : review.judge_mode === 'self' ? ' · 同模型自评' : ''}</strong><p>${escapeHTML(review.reason || (review.status === 'passed' ? '画面各项检查通过审核' : review.status === 'running' ? '截图已保存，正在审核' : '尚无最终结论'))}</p><p>${escapeHTML(checks.join(' · '))}</p>${review.stage ? `<p>失败阶段：${escapeHTML(review.stage)} · ${escapeHTML(review.error_code || '')}</p>` : ''}</div>`;
+  const names = {pelican:'鹈鹕形态',bicycle:'自行车主体',riding:'骑乘构图',motion:'骑行动作',scene:'场景',nonce_visible:'可见校验码',loop:'循环连续性'};
+  const v4 = review.version >= 4;
+  const core = ['pelican','bicycle','riding'];
+  const checks = Object.entries(review.checks || {}).filter(([key]) => !v4 || core.includes(key)).map(([key,value]) => `${names[key] || key}：${value === true ? '可辨识' : value === false && review.confirmed_failures?.includes(key) ? '两次复核不符' : '待复核'}`);
+  const details = v4 ? ['motion','scene','nonce_visible','loop'].filter(key => key in (review.checks || {})).map(key => `${names[key]}：${review.checks[key] === true ? '已观察到' : review.checks[key] === false ? '有改善建议' : '证据不足'}`) : [];
+  const confirmation = {confirmed:'两次请求均指出同一主体问题；仍属于模型意见，可查看截图核对。',disagreement:'两次主体判断有分歧，保留为待复核。',unavailable:'未完成第二次主体复核，未判为不合格。',legacy_not_confirmed:'旧规则的主体否定意见尚未按新标准重新审核，保留为待复核。'}[review.confirmation?.status];
+  const previous = review.previous_review;
+  const history = previous ? `<details><summary>查看原审核记录 · v${escapeHTML(previous.version || '旧版')}</summary><p>按 v4 主体标准重新归类，沿用已有观察结果，未重新请求模型；原结论与证据保留。</p><pre>${escapeHTML(JSON.stringify({status:previous.status,reason:previous.reason,checks:previous.checks,evidence:previous.evidence},null,2))}</pre></details>` : '';
+  return `<div class="review-detail"><strong>视觉审核${v4 ? ' · 主体识别 v4' : ''}${review.judge_mode === 'independent' ? ' · 独立裁判' : review.judge_mode === 'self' ? ' · 同模型自评' : ''}</strong><p>${escapeHTML(review.reason || (review.status === 'passed' ? '主体要求通过' : review.status === 'running' ? '截图已保存，正在审核' : '尚无最终结论'))}</p><p>${escapeHTML(checks.join(' · '))}</p>${details.length ? `<p>细节观察（不否决主体）：${escapeHTML(details.join(' · '))}</p>` : ''}${confirmation ? `<p>${escapeHTML(confirmation)}</p>` : ''}${history}${review.stage ? `<p>失败阶段：${escapeHTML(review.stage)} · ${escapeHTML(review.error_code || '')}</p>` : ''}</div>`;
 }
 
 function testSummary(tests = {}, internal = true) {
   const names = {pelican:'鹈鹕',candy:'糖果'};
   const statuses = {passed:'通过',invalid:'未通过',error:'执行异常',uncertain:'证据不足',queued:'排队中',running:'检测中',not_run:'未检测'};
   const review = tests.pelican?.review;
-  const reviewLabels = {passed:'通过',invalid:'未通过',error:'异常',uncertain:'无法判断'};
+  const reviewLabels = {passed:review?.version >= 4 ? '主体通过' : '通过',invalid:'主体不符',error:'执行异常',uncertain:'待复核'};
   return '<div class="test-results">' + Object.entries(tests).map(([name, result]) => `<span class="test-result ${escapeHTML(result.status)}">${names[name] || name} · ${name === 'pelican' && !internal && result.status === 'passed' ? '基础校验通过 · 未视觉审核' : statuses[result.status] || '未检测'}${result.attempts > 1 ? ` · 尝试 ${result.attempts} 次` : ''}</span>`).join('') + (internal && tests.pelican ? `<span class="test-result ${escapeHTML(review?.status || '')}">视觉审核 · ${reviewLabels[review?.status] || (tests.pelican.status === 'running' ? '待完成' : '未审核')}</span>` : '') + '</div>';
 }
 function candyDetail(result, prompt) {
@@ -201,7 +207,7 @@ async function refresh(page = galleryPage) {
     records = fresh.items;
     renderState(); renderGallery();
     const v = state.visual_stats;
-    if (v) $('visual-stats').textContent = `当前节点 · 鹈鹕 ${v.total} 次 · 已生成 ${v.generated} · 审核完成 ${v.reviewed} · 通过 ${v.passed} · 内容不合格 ${v.invalid} · 证据不足 ${v.uncertain} · 执行异常 ${v.errors}`;
+    if (v) $('visual-stats').textContent = `当前节点 · 鹈鹕 ${v.total} 次 · 已生成 ${v.generated} · 审核完成 ${v.reviewed} · 主体通过 ${v.passed} · 主体不符 ${v.invalid} · 待复核 ${v.uncertain} · 执行异常 ${v.errors}`;
     $('connection').textContent = state.candy_running ? '糖果检测进行中' : state.settings.enabled ? '自动检测已启用' : '自动检测已暂停';
     $('connection').className = 'connection online';
   } catch (error) {

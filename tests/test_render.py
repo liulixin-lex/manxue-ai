@@ -19,6 +19,8 @@ class RendererTests(unittest.TestCase):
         self.assertEqual(16,len(result['frames']))
         self.assertEqual(4,result['frames'][-1]['time'])
         self.assertGreater(result['metadata']['unique_frames'],4)
+        self.assertEqual(3,result['metadata']['renderer_version'])
+        self.assertTrue(all(a['repeating'] for a in result['metadata']['animations']))
 
     def test_delayed_animation_is_observed(self):
         svg=self.scene('<circle cx="100" cy="100" r="30"><animate attributeName="cx" values="100;800;100" begin="3s" dur="2s" repeatCount="indefinite"/></circle>')
@@ -46,6 +48,7 @@ class RendererTests(unittest.TestCase):
         result=render_evidence(svg)
         self.assertTrue(result['metadata']['sampling_limited'])
         self.assertEqual(12,result['frames'][-1]['time'])
+        self.assertFalse(result['metadata']['animations'][0]['repeating'])
 
     def test_intrinsic_size_without_viewbox(self):
         svg='<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="400"><circle cx="1500" cy="200" r="50" fill="red"/></svg>'
