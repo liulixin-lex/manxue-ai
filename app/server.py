@@ -35,8 +35,11 @@ MAX_RESPONSE = 2 * 1024 * 1024
 MAX_STREAM_RESPONSE = 16 * 1024 * 1024
 DEFAULTS = dict(base_url="https://api.example.com/v1", model="gpt-6-astra",
                 effort="medium", protocol="responses", api_key="", enabled=False, next_run=None,
-                interval_minutes=30, timeout_seconds=300, max_output_tokens=16000, guest_enabled=True, retry_count=2, review_timeout_seconds=240, review_effort="inherit", review_format="auto", judge_node_id=None)
+                interval_minutes=30, timeout_seconds=300, max_output_tokens=16000, guest_enabled=True, retry_count=2, review_timeout_seconds=240, review_effort="inherit", review_format="auto", judge_node_id=None,
+                review_mode="self", review_provider_id=None, promotion_enabled=False,
+                promotion_title="GGUUAI API", promotion_description="", promotion_url="", promotion_action="访问中转站")
 NODE_FIELDS = ("base_url", "api_key", "model", "effort", "protocol")
+PROVIDER_FIELDS = (*NODE_FIELDS, "token_field")
 # Scene variation does not change the subject-based review rubric.
 SCENE_MOTION = {
     "海边木栈道": "近处栈道木纹、栏杆向后滚动，远处海浪和帆船缓慢漂移。",
@@ -124,6 +127,25 @@ def redact(value, config):
     return value
 
 
+def promotion_url(value):
+    """A public outbound link, never an HTML fragment or a server-side fetch."""
+    if not isinstance(value, str) or len(value) > 2048:
+        raise ValueError("推广链接格式不正确")
+    value = value.strip()
+    if not value:
+        return ""
+    if any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in value) or "\\" in value:
+        raise ValueError("推广链接不能包含空格、换行或反斜杠")
+    if "://" not in value:
+        value = "https://" + value
+    url = parse.urlsplit(value)
+    if url.scheme not in ("https", "http") or not url.hostname or url.username or url.password:
+        raise ValueError("请填写完整的 HTTP 或 HTTPS 站点链接")
+    if url.port is not None and not 1 <= url.port <= 65535:
+        raise ValueError("推广链接端口无效")
+    return value
+
+
 def validate_settings(values, old):
     if not isinstance(values, dict):
         raise ValueError("设置必须为 JSON 对象")
@@ -161,7 +183,7 @@ def validate_settings(values, old):
         raise ValueError("思考强度或接口协议不正确")
     if any(ord(c) < 32 or ord(c) > 126 for c in new["api_key"]):
         raise ValueError("API Key 格式不正确")
-    for key in ("enabled", "guest_enabled"):
+    for key in ("enabled", "guest_enabled", "promotion_enabled"):
         if key in values:
             if not isinstance(values[key], bool):
                 raise ValueError("开关必须为布尔值")
@@ -176,11 +198,33 @@ def validate_settings(values, old):
             if values[key] not in choices:
                 raise ValueError('审核强度或输出格式不正确')
             new[key] = values[key]
+    if "review_mode" in values:
+        if values["review_mode"] not in ("self", "external"):
+            raise ValueError("请选择同模型自评或外部模型审核")
+        new["review_mode"] = values["review_mode"]
+        new["judge_node_id"] = None
+    if "review_provider_id" in values:
+        provider_id = values["review_provider_id"]
+        if provider_id is not None and (type(provider_id) is not int or provider_id <= 0):
+            raise ValueError("审核提供商编号无效")
+        new["review_provider_id"] = provider_id
+    for key, limit in (("promotion_title", 60), ("promotion_description", 120), ("promotion_action", 16)):
+        if key in values:
+            value = values[key]
+            if not isinstance(value, str) or len(value.strip()) > limit or any(ord(c) < 32 for c in value):
+                raise ValueError(f"推广文字过长或包含无效字符（最多 {limit} 字符）")
+            new[key] = value.strip()
+    if "promotion_url" in values:
+        new["promotion_url"] = promotion_url(values["promotion_url"])
+    if new.get("promotion_enabled") and not all(new.get(k) for k in ("promotion_title", "promotion_action", "promotion_url")):
+        raise ValueError("请先填写推广标题、按钮文字和跳转链接")
     if "judge_node_id" in values:
         node_id = values["judge_node_id"]
         if node_id is not None and (type(node_id) is not int or node_id <= 0):
             raise ValueError("审核节点编号无效")
         new["judge_node_id"] = node_id
+        if node_id is None and 'review_mode' not in values:
+            new['review_mode'] = 'self'
     if new["api_key"] and new["base_url"] != old["base_url"] and not values.get("api_key", "").strip():
         raise ValueError("更换 API 地址时，请重新填写该地址的 API Key")
     if new["enabled"] and not new["api_key"]:
@@ -430,11 +474,19 @@ def _call_model_direct(config, prompt):
     if config["protocol"] == "responses":
         path = "/responses"
         body = dict(common, input=[dict(role="user", content=prompt)],
-                    reasoning=dict(effort=config["effort"]), max_output_tokens=config["max_output_tokens"], store=False)
+                    max_output_tokens=config["max_output_tokens"], store=False)
+        if config['effort'] != 'omit':
+            body['reasoning'] = dict(effort=config['effort'])
+        if config.get('_system_prompt'):
+            body['instructions'] = config['_system_prompt']
     else:
         path = "/chat/completions"
-        body = dict(common, messages=[dict(role="user", content=prompt)],
-                    reasoning_effort=config["effort"], max_completion_tokens=config["max_output_tokens"])
+        body = dict(common, messages=[dict(role="user", content=prompt)])
+        body[config.get('token_field', 'max_completion_tokens')] = config['max_output_tokens']
+        if config['effort'] != 'omit':
+            body['reasoning_effort'] = config['effort']
+        if config.get('_system_prompt'):
+            body['messages'].insert(0, dict(role='system', content=config['_system_prompt']))
     if config.get('_output_schema'):
         spec = {'name':'pelican_review','strict':True,'schema':config['_output_schema']}
         if streaming:
@@ -506,7 +558,7 @@ def call_model(config, prompt):
     process_budget = remaining(config)
     public_config['timeout_seconds'] = max(.01,process_budget-min(1,process_budget*.05))
     public_config['_guest'] = bool(config.get('_guest'))
-    for key in ('_output_schema','_review_frame_count'):
+    for key in ('_output_schema','_review_frame_count','_system_prompt','token_field'):
         if key in config:
             public_config[key] = config[key]
     process = subprocess.Popen([sys.executable, str(ROOT / 'model_worker.py')],
@@ -630,7 +682,7 @@ def perform_test(config, prompt, nonce, model_call, kind="pelican", on_progress=
             safe_usage[key] = safe_usage.get(key,0)+value
         return dict(status=status, started=started, finished=None if status=='running' else time.time(),
             attempts=len(attempts_log), attempts_log=list(attempts_log), output=output, svg=svg,
-            checks=checks, error=redact(message,config)[:1000], error_code=error_code,
+            checks=checks, error=redact(redact(message,config),config.get('_judge',{}))[:1000], error_code=error_code,
             stage=current_stage or stage, usage=safe_usage, returned_model=redact(returned_model,config)[:200],
             review=review, evaluation_level='basic' if config.get('_guest') else 'visual', scoring_version=3)
     def evidence_progress(metadata):
@@ -755,6 +807,7 @@ class Monitor:
         self.scheduler_heartbeat = time.monotonic()
         self.render_health = {'status':'pending', 'checked_at':None}
         self.render_probe = None
+        self.provider_probe_slot = threading.BoundedSemaphore(1)
         with self.db() as db:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
@@ -764,6 +817,11 @@ class Monitor:
                     effort TEXT NOT NULL, protocol TEXT NOT NULL,
                     active INTEGER NOT NULL DEFAULT 0 CHECK(active IN (0,1)));
                 CREATE UNIQUE INDEX IF NOT EXISTS one_active_node ON nodes(active) WHERE active=1;
+                CREATE TABLE IF NOT EXISTS review_providers (
+                    id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE CHECK(length(name) BETWEEN 1 AND 60),
+                    base_url TEXT NOT NULL, api_key TEXT NOT NULL, model TEXT NOT NULL,
+                    effort TEXT NOT NULL, protocol TEXT NOT NULL, token_field TEXT NOT NULL DEFAULT 'max_tokens',
+                    verification TEXT NOT NULL DEFAULT '{}');
                 CREATE TABLE IF NOT EXISTS runs (
                     id INTEGER PRIMARY KEY, started REAL NOT NULL, finished REAL,
                     status TEXT NOT NULL, source TEXT NOT NULL, model TEXT NOT NULL,
@@ -797,6 +855,7 @@ class Monitor:
             if not db.execute("SELECT 1 FROM nodes").fetchone():
                 db.execute("INSERT INTO nodes(name,base_url,api_key,model,effort,protocol,active) VALUES (?,?,?,?,?,?,1)",
                            ("默认节点", *(config[key] for key in NODE_FIELDS)))
+            self.migrate_judge_node(db, config)
             self.store_settings(db, config)
             # Replay durable final results before marking interrupted workers as errors.
             restored = []
@@ -921,6 +980,99 @@ class Monitor:
         return config
 
     @staticmethod
+    def migrate_judge_node(db, config):
+        """Copy the legacy judge once; generation nodes remain untouched."""
+        if config.get('judge_node_id') is None:
+            return
+        node = db.execute('SELECT * FROM nodes WHERE id=?', (config['judge_node_id'],)).fetchone()
+        if not node or not node['api_key']:
+            raise ValueError('请选择已配置密钥的审核节点')
+        name = f"原审核节点 {node['id']} · {node['name']}"[:60]
+        saved = db.execute('SELECT id FROM review_providers WHERE name=?', (name,)).fetchone()
+        if saved:
+            provider_id = saved['id']
+        else:
+            provider_id = db.execute('INSERT INTO review_providers(name,base_url,api_key,model,effort,protocol,token_field) VALUES (?,?,?,?,?,?,?)',
+                (name, *(node[key] for key in NODE_FIELDS), 'max_completion_tokens')).lastrowid
+        config.update(review_mode='external', review_provider_id=provider_id, judge_node_id=None)
+
+    @staticmethod
+    def resolve_judge(db, config):
+        config.pop('_judge', None)
+        if config.get('review_mode', 'self') == 'external':
+            judge = db.execute('SELECT * FROM review_providers WHERE id=?', (config.get('review_provider_id'),)).fetchone()
+            if not judge or not judge['api_key']:
+                raise ValueError('请选择已配置密钥的外部审核提供商')
+            config['_judge'] = {key: judge[key] for key in PROVIDER_FIELDS}
+            config['_judge']['provider_id'] = judge['id']
+
+    def review_providers(self):
+        with self.db() as db:
+            rows = db.execute('SELECT * FROM review_providers ORDER BY id').fetchall()
+        return [dict(id=row['id'], name=redact(row['name'], dict(row)), base_url=mask_url(row['base_url']),
+                     has_key=bool(row['api_key']), api_key_masked=mask(row['api_key']) if row['api_key'] else '尚未配置',
+                     model=redact(row['model'], dict(row)), effort=row['effort'], protocol=row['protocol'],
+                     token_field=row['token_field'], verification=json.loads(row['verification'])) for row in rows]
+
+    def save_review_provider(self, values, provider_id=None):
+        if not isinstance(values, dict) or set(values) - {'name', *PROVIDER_FIELDS}:
+            raise ValueError('审核提供商字段不正确')
+        name = values.get('name', '')
+        if not isinstance(name, str) or not 1 <= len(name.strip()) <= 60 or any(ord(c) < 32 for c in name):
+            raise ValueError('请输入 1–60 字符的提供商名称')
+        with self.lock, self.db() as db:
+            old = db.execute('SELECT * FROM review_providers WHERE id=?', (provider_id,)).fetchone() if provider_id else None
+            if provider_id is not None and not old:
+                raise ValueError('审核提供商不存在')
+            if old is None and any(not isinstance(values.get(k), str) or not values[k].strip() for k in ('base_url', 'api_key', 'model')):
+                raise ValueError('新增审核提供商需填写 API 地址、API Key 和模型名称')
+            effort = values.get('effort', old['effort'] if old else 'omit')
+            token_field = values.get('token_field', old['token_field'] if old else 'max_tokens')
+            if effort not in ('omit', 'low', 'medium', 'high', 'xhigh') or token_field not in ('max_tokens', 'max_completion_tokens'):
+                raise ValueError('审核提供商的思考强度或 Token 参数无效')
+            base = dict(DEFAULTS, **({k: old[k] for k in NODE_FIELDS} if old else {}))
+            base['effort'] = 'medium'
+            config = validate_settings(dict(values, effort='medium' if effort == 'omit' else effort), base)
+            config.update(effort=effort, token_field=token_field)
+            fields = (name.strip(), *(config[k] for k in PROVIDER_FIELDS))
+            try:
+                if old:
+                    db.execute("UPDATE review_providers SET name=?,base_url=?,api_key=?,model=?,effort=?,protocol=?,token_field=?,verification='{}' WHERE id=?", (*fields, provider_id))
+                else:
+                    provider_id = db.execute('INSERT INTO review_providers(name,base_url,api_key,model,effort,protocol,token_field) VALUES (?,?,?,?,?,?,?)', fields).lastrowid
+            except sqlite3.IntegrityError:
+                raise ValueError('审核提供商名称已存在') from None
+        return next(row for row in self.review_providers() if row['id'] == provider_id)
+
+    def probe_review_provider(self, provider_id):
+        from provider_probe import probe
+        if not self.provider_probe_slot.acquire(blocking=False):
+            raise ValueError('已有提供商正在验证，请稍后再试')
+        try:
+            with self.db() as db:
+                row = db.execute('SELECT * FROM review_providers WHERE id=?', (provider_id,)).fetchone()
+            if not row:
+                raise ValueError('审核提供商不存在')
+            config = dict(DEFAULTS, **{key: row[key] for key in PROVIDER_FIELDS},
+                          timeout_seconds=60, max_output_tokens=1500, retry_count=0, _deadline=time.monotonic()+60)
+            try:
+                passed = probe(config, self.model_call)
+                result = dict(status='passed' if passed else 'failed', checked_at=time.time(),
+                              message='图片读取验证通过' if passed else '图片内容未识别正确，请确认模型支持图片输入')
+            except Exception as exc:
+                failure = diagnose(exc, 'review')
+                result = dict(status='error', checked_at=time.time(), error_code=failure.code,
+                              message=redact(str(failure), config)[:300])
+            with self.lock, self.db() as db:
+                current = db.execute('SELECT * FROM review_providers WHERE id=?', (provider_id,)).fetchone()
+                if not current or any(current[key] != row[key] for key in PROVIDER_FIELDS):
+                    raise ValueError('提供商配置已变更，请对新配置重新验证')
+                db.execute('UPDATE review_providers SET verification=? WHERE id=?', (json.dumps(result), provider_id))
+            return result
+        finally:
+            self.provider_probe_slot.release()
+
+    @staticmethod
     def store_settings(db, config):
         global_config = {k:config[k] for k in DEFAULTS if k not in NODE_FIELDS}
         db.execute("UPDATE settings SET value=? WHERE id=1", (json.dumps(global_config),))
@@ -973,10 +1125,8 @@ class Monitor:
         with self.lock:
             config = validate_settings(values, self.settings())
             with self.db() as db:
-                if config.get('judge_node_id') is not None:
-                    judge = db.execute('SELECT api_key FROM nodes WHERE id=?',(config['judge_node_id'],)).fetchone()
-                    if not judge or not judge['api_key']:
-                        raise ValueError('请选择已配置密钥的审核节点')
+                self.migrate_judge_node(db, config)
+                self.resolve_judge(db, config)
                 db.execute("UPDATE nodes SET base_url=?,api_key=?,model=?,effort=?,protocol=? WHERE active=1", tuple(config[k] for k in NODE_FIELDS))
                 self.store_settings(db, config)
         return self.settings(public=True)
@@ -986,11 +1136,7 @@ class Monitor:
         self.recover_runs()
         with self.lock, self.db() as db:
             config = self.settings()
-            if config.get('judge_node_id') is not None:
-                judge = db.execute('SELECT * FROM nodes WHERE id=?',(config['judge_node_id'],)).fetchone()
-                if not judge or not judge['api_key']:
-                    raise ValueError('审核节点不存在或未配置密钥')
-                config['_judge'] = {key:judge[key] for key in NODE_FIELDS}
+            self.resolve_judge(db, config)
             if node_id is not None:
                 if source != "manual":
                     raise ValueError("指定节点仅支持手动测试")
@@ -1361,6 +1507,8 @@ class Monitor:
         completed = [r for r in current if r["candy_status"] != "running"]
         settings = self.settings(public=True)
         public = {key: settings[key] for key in ("base_url", "model", "effort", "enabled", "next_run", "interval_minutes", "guest_enabled", "node_name", "active_node_id")}
+        promotion = {key.removeprefix('promotion_'): settings[key] for key in
+                     ('promotion_title', 'promotion_description', 'promotion_action', 'promotion_url')} if settings['promotion_enabled'] else None
         pelican_runs = [r for r in results if r['test_version'] >= 3 and r['tests'].get('pelican')]
         pelicans = [r['tests']['pelican'] for r in pelican_runs]
         visual = [t for t in pelicans if t.get('review')]
@@ -1370,7 +1518,7 @@ class Monitor:
             invalid=sum(t['review']['status']=='invalid' for t in visual),
             uncertain=sum(t['review']['status']=='uncertain' for t in visual),
             errors=sum(t.get('status')=='error' for t in pelicans))
-        return dict(settings=public, server_time=now, visual_stats=visual_stats, scoring_version=3, review_policy_version=REVIEW_VERSION,
+        return dict(settings=public, promotion=promotion, server_time=now, visual_stats=visual_stats, scoring_version=3, review_policy_version=REVIEW_VERSION,
                     running=running[0] if running else None, candy_running=any(r["candy_status"]=="running" for r in current), timeline=results,
                     stats=dict(total=len(current), legacy=len(results)-len(current), passed=sum(r["candy_status"] == "passed" for r in completed),
                                completed=len(completed), errors=sum(r["candy_status"] == "error" for r in completed),
@@ -1469,6 +1617,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(monitor.settings(public=True))
                 if url.path == "/api/admin/nodes":
                     return self.send(monitor.nodes())
+                if url.path == "/api/admin/review-providers":
+                    return self.send(monitor.review_providers())
             if url.path == "/api/state":
                 return self.send(monitor.state())
             if url.path == "/api/runs":
@@ -1492,7 +1642,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not match[2]:
                         return self.send(monitor.serialize(row, detail=True))
             return self.send({"error": "未找到记录"}, status=404)
-        files = {"/": "index.html", "/admin": "admin.html", "/admin/": "admin.html", "/admin.js": "admin.js", "/privacy.js": "privacy.js", "/app.js": "app.js", "/style.css": "style.css", "/observatory.css": "observatory.css", "/vendor/gsap.min.js": "vendor/gsap.min.js", "/favicon.svg": "favicon.svg"}
+        files = {"/": "index.html", "/admin": "admin.html", "/admin/": "admin.html", "/admin.js": "admin.js", "/providers.js": "providers.js", "/privacy.js": "privacy.js", "/app.js": "app.js", "/style.css": "style.css", "/observatory.css": "observatory.css", "/vendor/gsap.min.js": "vendor/gsap.min.js", "/favicon.svg": "favicon.svg"}
         name = files.get(url.path)
         if name:
             types = {"html": "text/html", "js": "text/javascript", "css": "text/css", "svg": "image/svg+xml"}
@@ -1531,6 +1681,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(self.server.monitor.save(values))
             if self.path == "/api/admin/nodes":
                 return self.send(self.server.monitor.save_node(values), status=201)
+            if self.path == "/api/admin/review-providers":
+                return self.send(self.server.monitor.save_review_provider(values), status=201)
+            provider_action = re.fullmatch(r"/api/admin/review-providers/([1-9]\d{0,17})(/probe)?", self.path)
+            if provider_action:
+                if provider_action[2]:
+                    return self.send(self.server.monitor.probe_review_provider(int(provider_action[1])))
+                return self.send(self.server.monitor.save_review_provider(values, int(provider_action[1])))
             node_action = re.fullmatch(r"/api/admin/nodes/([1-9]\d{0,17})(?:/(activate|run))?", self.path)
             if node_action:
                 node_id = int(node_action[1])

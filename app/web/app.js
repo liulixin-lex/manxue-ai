@@ -98,7 +98,24 @@ function candyDetail(result, prompt, open = false) {
   return `<details class="candy-detail" ${open ? 'open' : ''}><summary>糖果题回答与判分</summary><p class="field-note">${rule}</p><pre>${escapeHTML(result.output || result.error || (result.status === 'not_run' ? '旧记录未进行糖果测试' : '等待回答'))}</pre>${prompt ? `<details><summary>本轮糖果题原文</summary><pre>${escapeHTML(prompt)}</pre></details>` : ''}</details>`;
 }
 
+function renderPromotion() {
+  const promotion = state?.promotion, link = $('promotion');
+  let url;
+  try { url = new URL(promotion?.url); } catch { /* Unconfigured promotion stays hidden. */ }
+  const visible = Boolean(promotion?.title && promotion?.action && url && ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password);
+  link.hidden = !visible;
+  document.querySelector('.topbar').classList.toggle('has-promotion', visible);
+  if (!visible) { link.removeAttribute('href'); return; }
+  link.href = url.href;
+  $('promotion-title').textContent = promotion.title;
+  $('promotion-description').textContent = promotion.description || '';
+  $('promotion-description').hidden = !promotion.description;
+  $('promotion-action').textContent = promotion.action;
+  link.setAttribute('aria-label', promotion.title + ' · ' + promotion.action + '（新窗口）');
+}
+
 function renderState() {
+  renderPromotion();
   const s = state.stats, config = state.settings;
   $('rate').innerHTML = `${s.completed ? (s.passed / s.completed * 100).toFixed(1) : '—'}<small>%</small>`;
   $('rate-note').textContent = s.completed ? `${s.passed} / ${s.completed} 次通过` : s.legacy ? `${s.legacy} 条历史记录` : '等待第一份检测结果';

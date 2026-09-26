@@ -20,6 +20,7 @@
 !/app/model_worker.py
 !/app/artifacts.py
 !/app/replay_review.py
+!/app/provider_probe.py
 !/app/Dockerfile
 !/app/.dockerignore
 !/app/requirements.txt
@@ -29,6 +30,7 @@
 !/app/web/admin.html
 !/app/web/app.js
 !/app/web/admin.js
+!/app/web/providers.js
 !/app/web/privacy.js
 !/app/web/style.css
 !/app/web/observatory.css

@@ -110,7 +110,9 @@ def render_frames(svg):
 
 def review_content(frames, protocol, scene='', nonce=''):
     text_type = "input_text" if protocol == "responses" else "text"
-    content = [{"type": text_type, "text": REVIEW_PROMPT + f'\n本轮场景：{scene}；校验码：{nonce}。'}]
+    content = [{"type": text_type, "text": f'依据系统的统一观察标准审核以下 {len(frames)} 张真实截图。'
+               f'\n本轮场景：{scene}；校验码：{nonce}。'
+               f'\n帧编号为 0–{len(frames)-1}。只引用实际看见的内容；无法读取图片时核心三项必须填 null，不能猜测通过或失败。'}]
     for index, frame in enumerate(frames):
         content.append({"type": text_type, "text": f"证据帧 {index}，时间 {frame['time']:.3f} 秒"})
         url = "data:image/png;base64," + frame["png"]
@@ -256,6 +258,8 @@ def review_bundle(config, bundle, model_call):
             _stage='review', _stage_deadline=time.monotonic()+budget,
             _attempt_timeout_seconds=min(budget,120), _minimum_retry_seconds=min(60,budget),
             _review_frame_count=len(frames))
+        review_config['token_field'] = judge.get('token_field', 'max_completion_tokens')
+        review_config['_system_prompt'] = REVIEW_PROMPT
         if config.get('review_effort','inherit') != 'inherit':
             review_config['effort'] = config['review_effort']
         if config.get('review_format','auto') != 'prompt':
@@ -317,6 +321,7 @@ def review_bundle(config, bundle, model_call):
                 if remaining(review_config) < review_config['_minimum_retry_seconds']:
                     raise StageError('review','confirmation_budget','剩余审核预算不足以复核主体')
                 second_content = review_content(frames,review_config['protocol'],config.get('_scene',''),config.get('_nonce',''))
+                second_content[0]['text'] = content[0]['text']
                 second_content[0]['text'] += '\n这是独立的一次画面观察。请只依据截图观察整体主体，不因脚踏微小错位或写实程度判主体失败。'
                 second, _ = ask(second_content,'confirm_core',False)
                 assessments.append({'checks':second['checks'].copy(),'evidence':dict(second['evidence'])})
@@ -339,12 +344,15 @@ def review_bundle(config, bundle, model_call):
         result.update(assessments=assessments,confirmation=confirmation,loop_boundary_verified=has_loop_boundary)
         result.update(render=metadata,attempts=attempts,receipts=receipts,judge_model=judge['model'],
                       judge_effort=review_config['effort'],judge_mode='independent' if '_judge' in config else 'self',
+                      judge_provider_id=judge.get('provider_id'), judge_protocol=judge['protocol'],
                       returned_model=returned_model,frame_times=[f['time'] for f in frames])
         result['usage'] = total_usage
         result['usage_complete'] = not any(a.get('transport',{}).get('response_completed') is False for a in attempts)
         return result
     except StageError as exc:
-        exc.review_details = {'render':metadata,'attempts':attempts,'receipts':receipts,'version':REVIEW_VERSION}
+        exc.review_details = {'render':metadata,'attempts':attempts,'receipts':receipts,'version':REVIEW_VERSION,
+                              'judge_mode':'independent' if '_judge' in config else 'self',
+                              'judge_provider_id':judge.get('provider_id')}
         raise
 
 

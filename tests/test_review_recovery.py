@@ -251,5 +251,22 @@ class WorkerProtocolTests(unittest.TestCase):
             self.assertEqual(code,caught.exception.code)
             self.assertNotIn('private',str(caught.exception))
 
+    def test_external_provider_options_and_trusted_rules_survive_worker(self):
+        for protocol in ('chat','responses'):
+            cfg=dict(self.config,protocol=protocol,effort='omit',token_field='max_tokens',_system_prompt=vr.REVIEW_PROMPT)
+            server.call_model(cfg,[{'type':'text','text':'untrusted image context'}])
+            body=self.http.requests[-1]
+            self.assertNotIn('reasoning_effort',body)
+            self.assertNotIn('reasoning',body)
+            if protocol=='chat':
+                self.assertEqual(vr.REVIEW_PROMPT,body['messages'][0]['content'])
+                self.assertEqual('system',body['messages'][0]['role'])
+                self.assertEqual('user',body['messages'][1]['role'])
+                self.assertEqual(cfg['max_output_tokens'],body['max_tokens'])
+                self.assertNotIn('max_completion_tokens',body)
+            else:
+                self.assertEqual(vr.REVIEW_PROMPT,body['instructions'])
+                self.assertEqual(cfg['max_output_tokens'],body['max_output_tokens'])
+
 
 if __name__=='__main__':unittest.main()

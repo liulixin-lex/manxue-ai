@@ -22,7 +22,8 @@ function showConfig(data) {
   $('review-effort').value = config.review_effort || 'inherit';
   $('review-format').value = config.review_format || 'auto';
   $('review-timeout').value = config.review_timeout_seconds || 240;
-  $('judge-node').value = config.judge_node_id || '';
+  showReviewSettings(config);
+  showPromotionSettings(config);
   $('retry-count').value = config.retry_count;
   $('max-tokens').value = config.max_output_tokens;
   $('admin-enabled').checked = config.enabled;
@@ -46,11 +47,7 @@ function renderNodes() {
 }
 async function refreshNodes() {
   nodes = await api('/api/admin/nodes'); renderNodes();
-  const select = $('judge-node');
-  const value = select.dataset.loaded ? select.value : String(config?.judge_node_id || '');
-  select.replaceChildren(new Option('使用生成节点（同模型自评）', ''));
-  nodes.filter(n => n.has_key).forEach(n => select.add(new Option(`${n.name} · ${n.model}`, n.id)));
-  select.value = value; select.dataset.loaded = 'true';
+
 }
 function editNode(id = null) {
   const node = nodes.find(n => n.id === id);
@@ -95,7 +92,7 @@ $('node-form').addEventListener('submit', async event => {
   try {
     await api(editingNode === null ? '/api/admin/nodes' : `/api/admin/nodes/${editingNode}`,values);
     $('node-dialog').close();
-    showConfig(await api('/api/admin/settings')); await refreshNodes();
+    showConfig(await api('/api/admin/settings')); await refreshNodes(); await refreshProviders();
     message('节点已保存。可设为当前节点，或单独测试一次。');
   } catch (error) { $('node-message').textContent = error.message; }
   finally { values.base_url = ''; values.api_key = ''; busy = false; $('node-save').disabled = false; $('node-cancel').disabled = false; renderNodes(); }
@@ -120,16 +117,16 @@ async function load() {
 }
 async function action(fn) {
   if (busy) return;
-  busy = true; $('admin-save').disabled = true; renderNodes();
+  busy = true; $('admin-save').disabled = true; renderNodes(); renderProviders();
   try { await fn(); }
   catch (error) { message(error.message,true); }
-  finally { busy = false; $('admin-save').disabled = false; renderNodes(); }
+  finally { busy = false; $('admin-save').disabled = false; renderNodes(); renderProviders(); }
 }
 $('admin-form').addEventListener('submit', event => {
   event.preventDefault();
   if (!$('admin-form').reportValidity()) return;
   action(async () => {
-    const values = {review_effort:$('review-effort').value,review_format:$('review-format').value,judge_node_id:$('judge-node').value ? Number($('judge-node').value) : null,review_timeout_seconds:Number($('review-timeout').value),retry_count:Number($('retry-count').value),interval_minutes:Number($('interval').value), timeout_seconds:Number($('timeout').value), max_output_tokens:Number($('max-tokens').value), enabled:$('admin-enabled').checked, guest_enabled:$('guest-enabled').checked};
+    const values = {review_effort:$('review-effort').value,review_format:$('review-format').value,review_mode:$('review-mode').value,review_provider_id:$('review-provider').value ? Number($('review-provider').value) : null,...promotionValues(),review_timeout_seconds:Number($('review-timeout').value),retry_count:Number($('retry-count').value),interval_minutes:Number($('interval').value), timeout_seconds:Number($('timeout').value), max_output_tokens:Number($('max-tokens').value), enabled:$('admin-enabled').checked, guest_enabled:$('guest-enabled').checked};
     const result = await api('/api/admin/settings',values);
     showConfig(result);
     message('配置已保存并生效。后续检测使用新配置，无需重启。');
@@ -150,7 +147,7 @@ $('auth-form').addEventListener('submit', async event => {
     const session = await api('/api/auth/login',{password});
     token = session.token;
     showConfig(await api('/api/admin/settings'));
-    await refreshNodes();
+    await refreshNodes(); await refreshProviders();
     $('auth-dialog').close(); $('admin-token').value = ''; $('confirm-password').value = ''; $('auth-error').textContent = '';
   } catch (error) { token = ''; $('auth-error').textContent = error.message; }
   finally { $('auth-submit').disabled = false; }
@@ -159,6 +156,7 @@ $('logout').addEventListener('click', async () => {
   try { await api('/api/auth/logout',{}); }
   finally {
     token = ''; config = undefined; nodes = []; nodeSignature = ''; $('node-list').replaceChildren();
+    clearProviders();
     privacy.clear($('admin-url')); privacy.clear($('admin-key'));
     $('admin-content').hidden = true; $('logout').hidden = true;
     await load();

@@ -6,6 +6,7 @@
 !model_worker.py
 !artifacts.py
 !replay_review.py
+!provider_probe.py
 !requirements.txt
 !web/
 !web/**

@@ -8,7 +8,7 @@ import sqlite3
 import time
 from artifacts import atomic_write, load_evidence
 from reliability import StageError
-from server import DEFAULTS, NODE_FIELDS, call_model, redact
+from server import DEFAULTS, NODE_FIELDS, Monitor, call_model, redact
 from visual_review import review_bundle
 
 
@@ -33,7 +33,9 @@ def main():
         if not node:
             parser.error('The original node no longer exists')
         config.update({key:node[key] for key in NODE_FIELDS})
-        if config.get('judge_node_id'):
+        if config.get('review_mode') == 'external':
+            Monitor.resolve_judge(db,config)
+        elif config.get('judge_node_id'):
             judge=db.execute('SELECT * FROM nodes WHERE id=?',(config['judge_node_id'],)).fetchone()
             if not judge:
                 parser.error('The configured judge node no longer exists')

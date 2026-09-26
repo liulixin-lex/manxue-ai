@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#f6f7f7"><meta name="description" content="用一只骑自行车的鹈鹕，持续观察你的模型输出。">
-  <title>鹈鹕观察站 · Pelican Watch</title>
+  <title>GGUUAI · 鹈鹕观察站</title>
   <link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/observatory.css"><script defer src="/privacy.js"></script><script defer src="/vendor/gsap.min.js"></script><script defer src="/app.js"></script>
 </head>
 <body class="observatory">
   <a class="skip-link" href="#workspace">跳至检测结果</a>
-  <header class="topbar"><a class="brand" href="/"><img src="/favicon.svg" alt="" width="30" height="30">鹈鹕观察站 <span>PELICAN WATCH</span></a><span class="connection" id="connection" role="status">连接检测服务中</span></header>
+  <header class="topbar"><a class="brand" href="/"><img src="/favicon.svg" alt="" width="30" height="30">GGUUAI <span>鹈鹕观察站</span></a><a id="promotion" class="promotion" href="/" target="_blank" rel="noopener noreferrer sponsored" hidden><div class="promotion-copy"><strong id="promotion-title"></strong><span id="promotion-description"></span></div><span class="promotion-cta"><span id="promotion-action"></span><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span></a><span class="connection" id="connection" role="status">连接检测服务中</span></header>
   <main id="workspace">
     <header class="page-head"><div><h1>看见模型的每一次输出<span class="accent">。</span></h1></div><button id="refresh" class="button secondary">刷新记录</button></header>
     <nav class="view-tabs" role="tablist" aria-label="页面"><button id="tab-observatory" role="tab" aria-controls="view-observatory" aria-selected="true" tabindex="0" data-view="observatory">观测站</button><button id="tab-guest" role="tab" aria-controls="view-guest" aria-selected="false" tabindex="-1" data-view="guest">自测模型</button></nav>
