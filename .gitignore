@@ -2,13 +2,27 @@
 /*
 !/.gitignore
 !/README.md
+!/CHANGELOG.md
 !/LICENSE
 !/compose.yaml
+!/tests/
+!/tests/**
+!/docs/
+!/docs/**
+!/.github/
+!/.github/workflows/
+!/.github/workflows/*.yml
 !/app/
 /app/*
 !/app/server.py
 !/app/visual_review.py
 !/app/render_frames.py
+!/app/reliability.py
+!/app/model_worker.py
+!/app/artifacts.py
+!/app/replay_review.py
+!/app/provider_probe.py
+!/app/svg_display.py
 !/app/Dockerfile
 !/app/.dockerignore
 !/app/requirements.txt
@@ -18,8 +32,15 @@
 !/app/web/admin.html
 !/app/web/app.js
 !/app/web/admin.js
+!/app/web/providers.js
 !/app/web/privacy.js
 !/app/web/style.css
+!/app/web/observatory.css
+!/app/web/vendor/
+/app/web/vendor/*
+!/app/web/vendor/gsap.min.js
+!/app/web/vendor/GSAP-LICENSE.txt
+!/app/web/vendor/README.md
 !/app/web/favicon.svg
 
 # Runtime data, credentials, backups, and local tools are always private.

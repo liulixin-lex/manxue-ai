@@ -1,18 +1,30 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>后台管理 · 鹈鹕观察站</title><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/style.css"><script defer src="/privacy.js"></script><script defer src="/admin.js"></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GGUUAI · 后台管理</title><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/style.css"><script defer src="/privacy.js"></script><script defer src="/admin.js"></script><script defer src="/providers.js"></script></head>
 <body>
-  <nav class="topbar" aria-label="主导航"><a class="brand" href="/"><img src="/favicon.svg" alt="" width="30" height="30">鹈鹕观察站 <span>ADMIN CONSOLE</span></a><div class="action-buttons"><button class="button secondary" id="logout" hidden>退出登录</button><a class="button secondary" href="/">返回公开页面 ↗</a></div></nav>
+  <nav class="topbar" aria-label="主导航"><a class="brand" href="/"><img src="/favicon.svg" alt="" width="30" height="30">GGUUAI <span>后台管理</span></a><div class="action-buttons"><button class="button secondary" id="logout" hidden>退出登录</button><a class="button secondary" href="/">返回公开页面 ↗</a></div></nav>
   <main class="admin-main">
-    <header class="page-head"><div><div class="eyebrow">SYSTEM SETTINGS <span>/ ADMIN</span></div><h1>后台检测，由你设定<span class="accent">。</span></h1><p>保存即生效，无需重启服务。公开页面只展示脱敏信息。</p></div><span class="badge neutral" id="admin-status">连接管理服务中</span></header>
+    <header class="page-head"><div><h1>后台检测，由你设定<span class="accent">。</span></h1><p>保存即生效，无需重启服务。公开页面只展示脱敏信息。</p></div><span class="badge neutral" id="admin-status">连接管理服务中</span></header>
     <div id="admin-content" hidden>
       <section class="panel settings-panel admin-settings nodes-panel" aria-labelledby="nodes-title">
-        <div class="nodes-heading"><div class="section-heading"><span class="number">01</span><div><h2 id="nodes-title">模型节点</h2><p>一个当前节点负责定时检测。每个节点都可独立测试，单次测试不会切换当前节点。</p></div></div><button class="button primary" type="button" id="add-node">＋ 新增节点</button></div>
+        <div class="nodes-heading"><div class="section-heading"><div><h2 id="nodes-title">模型节点</h2><p>一个当前节点负责定时检测。每个节点都可独立测试，单次测试不会切换当前节点。</p></div></div><button class="button primary" type="button" id="add-node">＋ 新增节点</button></div>
         <div id="node-list" aria-live="polite"></div>
         <p class="field-note">更换当前节点不影响已发出的请求。后台同一时刻执行一轮检测，防止重复消耗额度。</p>
       </section>
+
+      <section id="provider-editor" class="panel settings-panel admin-settings" hidden aria-labelledby="provider-title"><form id="provider-form" autocomplete="off">
+        <div class="section-heading"><div><h2 id="provider-title">新增审核提供商</h2><p>只用于视觉审核，不会切换生成节点。</p></div></div>
+        <div class="provider-fields"><div><label for="provider-name">提供商名称</label><input id="provider-name" required maxlength="60" placeholder="例如：独立视觉审核">
+        <label for="provider-model">视觉模型名称</label><input id="provider-model" required maxlength="120" placeholder="填写提供商的模型 ID" spellcheck="false">
+        <label for="provider-protocol">接口协议</label><select id="provider-protocol"><option value="chat">Chat Completions</option><option value="responses">Responses</option></select></div>
+        <div><label for="provider-url">API 地址</label><input id="provider-url" required maxlength="2048" autocomplete="off" data-secret spellcheck="false" placeholder="https://example.com/v1"><p id="provider-saved-url" class="field-note"></p>
+        <label for="provider-key">API Key</label><input id="provider-key" required maxlength="4096" autocomplete="off" data-secret spellcheck="false" placeholder="填写审核提供商的 API Key"><p id="provider-saved-key" class="field-note"></p></div></div>
+        <details class="provider-advanced"><summary>接口兼容设置</summary><div class="form-row"><div><label for="provider-effort">思考参数</label><select id="provider-effort"><option value="omit">不发送（兼容多数视觉模型）</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option></select></div><div id="provider-token-row"><label for="provider-token-field">输出长度参数</label><select id="provider-token-field"><option value="max_tokens">max_tokens</option><option value="max_completion_tokens">max_completion_tokens</option></select></div></div></details>
+        <p class="field-note">编辑时地址和密钥留空即可保留；更换地址需重新填写密钥。保存后不返回完整凭据。</p><p id="provider-message" class="form-message" role="status"></p>
+        <div class="action-buttons"><button id="provider-cancel" class="button secondary" type="button">取消</button><button id="provider-save" class="button primary" type="submit">保存提供商</button></div>
+      </form></section>
       <form id="admin-form" autocomplete="off" class="admin-layout system-form">
-        <section class="panel settings-panel admin-settings"><div class="section-heading"><span class="number">02</span><div><h2>调度与系统配置</h2><p>新配置用于下一次请求，正在运行的请求不受影响。</p></div></div>
+        <section class="panel settings-panel admin-settings"><div class="section-heading"><div><h2>调度与系统配置</h2><p>新配置用于下一次请求，正在运行的请求不受影响。</p></div></div>
           <div class="admin-fields"><label for="interval">检测时间间隔 <span>分钟</span></label><input id="interval" type="number" min="1" max="1440" step="1" required><p class="field-note">支持 1–1440 分钟。修改后按新间隔重新计算下次检测时间。</p>
           <div class="form-row"><div><label for="timeout">后台请求超时 / 秒</label><input id="timeout" type="number" min="10" max="600" step="1" required></div><div><label for="max-tokens">后台输出 Token 上限</label><input id="max-tokens" type="number" min="1024" max="64000" step="1" required></div></div>
           <label for="retry-count">后台失败重试次数</label><input id="retry-count" type="number" min="0" max="5" step="1" required><p class="field-note">默认重试 2 次，最多请求 3 次；仅重试临时请求故障，所有尝试共用本项超时预算。</p>
@@ -20,13 +32,36 @@
           <label class="toggle-row" for="guest-enabled"><span><b>开放访客独立测试</b><small>使用访客当次提交的接口和密钥</small></span><input type="checkbox" id="guest-enabled" role="switch"><span class="switch" aria-hidden="true"></span></label>
           <div class="admin-next"><span>下次后台检测</span><strong id="admin-next">尚未启用</strong><small>北京时间 UTC+8</small></div></div>
         </section>
+
+        <section class="panel settings-panel admin-settings review-settings" aria-labelledby="review-title">
+          <div class="section-heading"><div><h2 id="review-title">鹈鹕判定</h2><p>适用于站点定时检测和节点单次检测。</p></div></div>
+          <div class="admin-fields"><label class="toggle-row" for="review-enabled"><span><b>启用鹈鹕判定</b><small>关闭后只展示生成画面，不判通过或未通过</small></span><input type="checkbox" id="review-enabled" role="switch" aria-describedby="review-enabled-note" aria-controls="review-options"><span class="switch" aria-hidden="true"></span></label><p id="review-enabled-note" class="field-note" role="status"></p></div>
+          <div id="review-options" class="admin-fields"><label for="review-mode">审核方式</label><select id="review-mode"><option value="self">同模型自评</option><option value="external">外部模型审核</option></select><p id="review-mode-note" class="field-note"></p>
+          <div id="external-review-fields" hidden><label for="review-provider">审核提供商</label><select id="review-provider"><option value="">选择提供商</option></select></div>
+          <label for="review-effort">审核思考强度</label><select id="review-effort"><option value="inherit">沿用所选模型设置</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="xhigh">极高</option></select>
+          <label for="review-format">审核输出协议</label><select id="review-format"><option value="auto">优先结构化输出，兼容不支持的接口</option><option value="json_schema">严格结构化输出</option><option value="prompt">提示词 JSON（兼容模式）</option></select>
+          <label for="review-timeout">审核请求总预算 / 秒</label><input id="review-timeout" type="number" min="10" max="300" step="1" required><p class="field-note">建议审核总预算 240 秒；单次最多 120 秒，预算不足 60 秒不发起重试。截图预算 45 秒。整轮预算为三阶段预算之和。</p>
+
+          </div><div class="providers-heading"><h3>外部审核提供商</h3><button id="add-provider" type="button" class="button secondary">新增提供商</button></div>
+          <p class="field-note">接入支持图片的 OpenAI 兼容接口。保存提供商后，在上方选择并保存系统配置。</p>
+          <div id="provider-list" aria-live="polite"></div><p id="provider-feedback" class="form-message" role="status"></p>
+          <details class="review-rules"><summary>查看审核标准</summary><p>依据实际截图识别鹈鹕、自行车和骑乘关系。允许卡通简化、遮挡与轻微错位；动作、背景和循环细节作为改进建议，不单独否决主体。</p><p>否定主体需要多帧证据和再次观察。证据不足保留为待复核；网络或模型异常单独记录。外部审核失败不会自动切回自评。</p></details>
+        </section>
+        <section class="panel settings-panel admin-settings promotion-settings" aria-labelledby="promotion-settings-title"><div class="section-heading"><div><h2 id="promotion-settings-title">首页推广位</h2><p>展示在顶部中间，点击后打开你的中转站。</p></div></div>
+          <div class="admin-fields"><label class="toggle-row" for="promotion-enabled"><span><b>显示推广位</b><small>未启用时不占用首页空间</small></span><input type="checkbox" id="promotion-enabled" role="switch"><span class="switch" aria-hidden="true"></span></label>
+          <label for="promotion-title-input">推广标题</label><input id="promotion-title-input" maxlength="60" placeholder="GGUUAI API">
+          <label for="promotion-description-input">简短介绍 <span>选填</span></label><input id="promotion-description-input" maxlength="120" placeholder="填写你希望展示的一句话">
+          <label for="promotion-url-input">跳转链接</label><input id="promotion-url-input" type="text" maxlength="2048" placeholder="https://你的中转站域名" spellcheck="false">
+          <label for="promotion-action-input">按钮文字</label><input id="promotion-action-input" maxlength="16" placeholder="访问中转站">
+          <div class="promotion-preview" aria-label="推广位预览"><div><strong id="promotion-preview-title">GGUUAI API</strong><p id="promotion-preview-description"></p></div><span id="promotion-preview-action">访问中转站</span></div>
+          </div></section>
         <div class="admin-actions"><div><p id="admin-message" class="form-message" role="status" aria-live="polite"></p><p class="field-note">访客凭据不保存；仅脱敏结果公开保留 1 小时。</p></div><div class="action-buttons"><button class="button secondary" type="button" id="admin-run">测试当前节点一次</button><button class="button primary" type="submit" id="admin-save">保存系统配置</button></div></div>
       </form>
     </div>
     <footer><span>后台配置修改仅对站点任务生效，访客测试独立执行。</span><a href="/">查看公开观察站 ↗</a></footer>
   </main>
   <dialog id="node-dialog" aria-labelledby="node-title"><form id="node-form" autocomplete="off">
-    <div class="eyebrow">MODEL NODE</div><h2 id="node-title">新增节点</h2>
+    <h2 id="node-title">新增节点</h2>
     <label for="node-name">节点名称</label><input id="node-name" required maxlength="60" placeholder="例如：主线路、备用线路">
           <div class="saved-settings"><div><span>已保存的 API 地址</span><strong id="saved-url">****</strong></div><div><span>已保存的 API Key</span><strong id="saved-key">尚未配置</strong></div></div>
           <label for="admin-url">更换 API 地址</label><input id="admin-url" type="text" placeholder="留空保留当前地址" maxlength="2048" autocomplete="off" spellcheck="false" data-secret>
@@ -36,5 +71,5 @@
     <p id="node-message" class="form-message" role="status"></p>
     <div class="action-buttons"><button class="button secondary" type="button" id="node-cancel">取消</button><button class="button primary" type="submit" id="node-save">保存节点</button></div>
   </form></dialog>
-  <dialog id="auth-dialog" aria-labelledby="auth-title"><form id="auth-form"><div class="eyebrow">ADMIN ACCESS</div><h2 id="auth-title">登录后台管理</h2><p id="auth-description">请输入管理密码。</p><label for="admin-token">管理密码</label><input id="admin-token" type="password" autocomplete="current-password" maxlength="256" required><div id="confirm-password-row" hidden><label for="confirm-password">确认管理密码</label><input id="confirm-password" type="password" autocomplete="new-password" maxlength="256"></div><button class="button primary full" id="auth-submit">登录</button><p id="auth-error" role="status"></p><a href="/">返回公开页面</a></form></dialog>
+  <dialog id="auth-dialog" aria-labelledby="auth-title"><form id="auth-form"><h2 id="auth-title">登录后台管理</h2><p id="auth-description">请输入管理密码。</p><label for="admin-token">管理密码</label><input id="admin-token" type="password" autocomplete="current-password" maxlength="256" required><div id="confirm-password-row" hidden><label for="confirm-password">确认管理密码</label><input id="confirm-password" type="password" autocomplete="new-password" maxlength="256"></div><button class="button primary full" id="auth-submit">登录</button><p id="auth-error" role="status"></p><a href="/">返回公开页面</a></form></dialog>
 </body></html>

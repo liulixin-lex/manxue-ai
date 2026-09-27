@@ -19,6 +19,11 @@ function showConfig(data) {
   config = data;
   $('interval').value = config.interval_minutes;
   $('timeout').value = config.timeout_seconds;
+  $('review-effort').value = config.review_effort || 'inherit';
+  $('review-format').value = config.review_format || 'auto';
+  $('review-timeout').value = config.review_timeout_seconds || 240;
+  showReviewSettings(config);
+  showPromotionSettings(config);
   $('retry-count').value = config.retry_count;
   $('max-tokens').value = config.max_output_tokens;
   $('admin-enabled').checked = config.enabled;
@@ -35,12 +40,15 @@ function renderNodes() {
   if (signature === nodeSignature) return;
   nodeSignature = signature;
   const running = nodes.some(n => n.last_run?.status === 'running');
-  const labels = {passed:'双项通过',error:'请求失败',invalid:'校验未通过',running:'检测中'};
+  const labels = {passed:'双项通过',displayed:'鹈鹕仅展示',error:'执行异常',uncertain:'证据不足',invalid:'校验未通过',running:'检测中'};
   $('node-list').innerHTML = nodes.map(n => `<article class="node-row ${n.active ? 'active-node' : ''}"><div class="node-info"><h3>${escapeHTML(n.name)} ${n.active ? '<span class="badge passed">当前节点</span>' : ''}</h3><p>${escapeHTML(n.base_url)} · ${escapeHTML(n.model)} · ${escapeHTML(n.effort)} · ${n.protocol === 'responses' ? 'Responses' : 'Chat Completions'}</p><p>密钥 ${escapeHTML(n.api_key_masked)}</p></div><div class="node-actions"><button class="button secondary" type="button" data-edit="${n.id}" ${busy ? 'disabled' : ''}>编辑</button><button class="button secondary" type="button" data-activate="${n.id}" ${busy || n.active || !n.has_key ? 'disabled' : ''}>${n.active ? '使用中' : '设为当前'}</button><button class="button primary" type="button" data-test="${n.id}" ${busy || running || !n.has_key ? 'disabled' : ''}>测试一次</button></div><div class="node-result">${n.last_run ? `<span class="badge ${escapeHTML(n.last_run.status)}">${labels[n.last_run.status] || '尚未检测'}</span><span>最近一轮 #${n.last_run.id} · ${new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(n.last_run.started*1000))}</span><a href="/?run=${n.last_run.id}" target="_blank" rel="noopener">查看结果 ↗</a>${n.last_run.error ? `<p>${escapeHTML(n.last_run.error)}</p>` : ''}` : '<span>尚未检测</span>'}</div></article>`).join('');
   $('admin-run').disabled = busy || running || !config?.has_key;
   $('add-node').disabled = busy;
 }
-async function refreshNodes() { nodes = await api('/api/admin/nodes'); renderNodes(); }
+async function refreshNodes() {
+  nodes = await api('/api/admin/nodes'); renderNodes();
+
+}
 function editNode(id = null) {
   const node = nodes.find(n => n.id === id);
   editingNode = id;
@@ -84,7 +92,7 @@ $('node-form').addEventListener('submit', async event => {
   try {
     await api(editingNode === null ? '/api/admin/nodes' : `/api/admin/nodes/${editingNode}`,values);
     $('node-dialog').close();
-    showConfig(await api('/api/admin/settings')); await refreshNodes();
+    showConfig(await api('/api/admin/settings')); await refreshNodes(); await refreshProviders();
     message('节点已保存。可设为当前节点，或单独测试一次。');
   } catch (error) { $('node-message').textContent = error.message; }
   finally { values.base_url = ''; values.api_key = ''; busy = false; $('node-save').disabled = false; $('node-cancel').disabled = false; renderNodes(); }
@@ -109,16 +117,16 @@ async function load() {
 }
 async function action(fn) {
   if (busy) return;
-  busy = true; $('admin-save').disabled = true; renderNodes();
+  busy = true; $('admin-save').disabled = true; renderNodes(); renderProviders();
   try { await fn(); }
   catch (error) { message(error.message,true); }
-  finally { busy = false; $('admin-save').disabled = false; renderNodes(); }
+  finally { busy = false; $('admin-save').disabled = false; renderNodes(); renderProviders(); }
 }
 $('admin-form').addEventListener('submit', event => {
   event.preventDefault();
   if (!$('admin-form').reportValidity()) return;
   action(async () => {
-    const values = {retry_count:Number($('retry-count').value),interval_minutes:Number($('interval').value), timeout_seconds:Number($('timeout').value), max_output_tokens:Number($('max-tokens').value), enabled:$('admin-enabled').checked, guest_enabled:$('guest-enabled').checked};
+    const values = {review_enabled:$('review-enabled').checked,review_effort:$('review-effort').value,review_format:$('review-format').value,review_mode:$('review-mode').value,review_provider_id:$('review-provider').value ? Number($('review-provider').value) : null,...promotionValues(),review_timeout_seconds:Number($('review-timeout').value),retry_count:Number($('retry-count').value),interval_minutes:Number($('interval').value), timeout_seconds:Number($('timeout').value), max_output_tokens:Number($('max-tokens').value), enabled:$('admin-enabled').checked, guest_enabled:$('guest-enabled').checked};
     const result = await api('/api/admin/settings',values);
     showConfig(result);
     message('配置已保存并生效。后续检测使用新配置，无需重启。');
@@ -139,7 +147,7 @@ $('auth-form').addEventListener('submit', async event => {
     const session = await api('/api/auth/login',{password});
     token = session.token;
     showConfig(await api('/api/admin/settings'));
-    await refreshNodes();
+    await refreshNodes(); await refreshProviders();
     $('auth-dialog').close(); $('admin-token').value = ''; $('confirm-password').value = ''; $('auth-error').textContent = '';
   } catch (error) { token = ''; $('auth-error').textContent = error.message; }
   finally { $('auth-submit').disabled = false; }
@@ -148,6 +156,7 @@ $('logout').addEventListener('click', async () => {
   try { await api('/api/auth/logout',{}); }
   finally {
     token = ''; config = undefined; nodes = []; nodeSignature = ''; $('node-list').replaceChildren();
+    clearProviders();
     privacy.clear($('admin-url')); privacy.clear($('admin-key'));
     $('admin-content').hidden = true; $('logout').hidden = true;
     await load();
