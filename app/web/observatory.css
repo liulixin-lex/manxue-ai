@@ -42,3 +42,14 @@ dialog{border:0;border-radius:4px;padding:0;width:min(900px,calc(100% - 32px));m
 .token-usage b{font-weight:500;color:var(--body);font-variant-numeric:tabular-nums}
 .card-body .token-usage{margin:12px 0 0}
 .detail-meta+.token-usage{margin:-6px 0 18px}
+
+.candy-stats{grid-template-columns:repeat(5,minmax(0,1fr))}
+.stat strong.error-count{color:var(--bad)}
+.stat strong.invalid-count{color:var(--warn)}
+@media(max-width:760px){
+  .candy-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .candy-stats .countdown{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;align-items:center;border-top:1px solid var(--line);padding-top:16px}
+  .candy-stats .countdown .stat-label{grid-column:1;grid-row:1}
+  .candy-stats .countdown strong{grid-column:2;grid-row:1 / span 2;margin:0}
+  .candy-stats .countdown p{grid-column:1;grid-row:2}
+}

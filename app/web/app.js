@@ -98,8 +98,8 @@ function renderState() {
   $('rate').innerHTML = `${scored ? (s.passed / scored * 100).toFixed(1) : '—'}<small>%</small>`;
   $('rate-note').textContent = scored ? `${s.passed} / ${scored} 次通过` : '暂无有效答题结果';
   $('total').innerHTML = `${s.total}<small>次</small>`;
-  $('errors').innerHTML = `${s.errors + s.invalid}<small>次</small>`;
-  $('error-note').textContent = `请求失败 ${s.errors} · 降智 ${s.invalid}`;
+  $('errors').innerHTML = `${s.errors}<small>次</small>`;
+  $('invalid').innerHTML = `${s.invalid}<small>次</small>`;
   $('model-title').textContent = config.model;
   $('site-name').textContent = `${config.node_name || '当前节点'} · ${config.base_url}`;
   $('effort-label').textContent = config.effort;

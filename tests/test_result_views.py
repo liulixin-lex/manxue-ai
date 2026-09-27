@@ -132,6 +132,10 @@ class ResultBrowserTests(ResultFixture):
                 self.assertEqual(3,page.locator('#candy-grid button').count())
                 self.assertEqual('50.0%',page.locator('#rate').inner_text())
                 self.assertEqual('1 / 2 次通过',page.locator('#rate-note').inner_text())
+                self.assertEqual('1次',page.locator('#errors').text_content())
+                self.assertEqual('1次',page.locator('#invalid').text_content())
+                self.assertEqual(['成功率','糖果题检测','请求失败','降智','距离下次检测'],page.locator('.candy-stats .stat-label').all_text_contents())
+                self.assertNotIn('失败与降智',page.locator('.candy-stats').inner_text())
                 self.assertTrue(page.locator('#view-pelican').is_visible())
                 self.assertFalse(page.locator('#view-guest').is_visible())
                 colors={'passed':'rgb(35, 132, 95)','invalid':'rgb(237, 189, 64)','error':'rgb(206, 59, 64)'}
@@ -197,15 +201,28 @@ class ResultBrowserTests(ResultFixture):
                 self.seed('error',None);page.evaluate('refresh()')
                 self.assertEqual('50.0%',page.locator('#rate').inner_text())
                 self.assertEqual('1 / 2 次通过',page.locator('#rate-note').inner_text())
-                self.assertIn('请求失败 2',page.locator('#error-note').inner_text())
+                self.assertEqual('2次',page.locator('#errors').text_content())
+                self.assertEqual('1次',page.locator('#invalid').text_content())
                 self.assertEqual(2,page.locator('#candy-grid .candy-square.error').count())
+                for width in (1440,1024,768,390,320):
+                    page.set_viewport_size({'width':width,'height':1000})
+                    self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
+                    positions=page.locator('.candy-stats').evaluate('''el=>[...el.children].map(item=>{const r=item.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};})''')
+                    if width>760:
+                        self.assertEqual(1,len({round(p['y']) for p in positions}))
+                    else:
+                        self.assertEqual(positions[2]['y'],positions[3]['y'])
+                        self.assertGreater(positions[4]['y'],positions[2]['y'])
+                    if os.environ.get('SPLIT_STATS_SCREENSHOTS') and width in (1440,390):
+                        page.locator('.candy-stats').screenshot(path=f'/qa/stats-{width}.png')
                 # An errors-only history has no answer sample, not a zero success rate.
                 with self.monitor.db() as db:
                     db.execute('DELETE FROM runs WHERE id IN (?,?)',self.ids[:2])
                 page.evaluate('refresh()')
                 self.assertEqual('—%',page.locator('#rate').inner_text())
                 self.assertEqual('暂无有效答题结果',page.locator('#rate-note').inner_text())
-                self.assertIn('请求失败 2',page.locator('#error-note').inner_text())
+                self.assertEqual('2次',page.locator('#errors').text_content())
+                self.assertEqual('0次',page.locator('#invalid').text_content())
                 self.seed('passed',None)
                 self.seed('running',None);self.seed('queued',None)
                 page.evaluate('refresh()')
@@ -214,7 +231,8 @@ class ResultBrowserTests(ResultFixture):
                 self.seed('invalid',None);page.evaluate('refresh()')
                 self.assertEqual('50.0%',page.locator('#rate').inner_text())
                 self.assertEqual('1 / 2 次通过',page.locator('#rate-note').inner_text())
-                self.assertEqual('请求失败 2 · 降智 1',page.locator('#error-note').inner_text())
+                self.assertEqual('2次',page.locator('#errors').text_content())
+                self.assertEqual('1次',page.locator('#invalid').text_content())
                 self.assertFalse(errors,errors)
                 browser.close()
         finally:http.shutdown();http.server_close();thread.join()
