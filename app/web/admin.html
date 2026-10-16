@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GGUUAI · 后台管理</title><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/style.css"><script defer src="/privacy.js"></script><script defer src="/admin.js"></script><script defer src="/providers.js"></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GGUUAI · 后台管理</title><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/style.css"><script defer src="/privacy.js"></script><script defer src="/admin.js"></script><script defer src="/guest-records.js"></script><script defer src="/providers.js"></script></head>
 <body>
   <nav class="topbar" aria-label="主导航"><a class="brand" href="/"><img src="/favicon.svg" alt="" width="30" height="30">GGUUAI <span>后台管理</span></a><div class="action-buttons"><button class="button secondary" id="logout" hidden>退出登录</button><a class="button secondary" href="/">返回公开页面 ↗</a></div></nav>
   <main class="admin-main">
@@ -10,6 +10,20 @@
         <div class="nodes-heading"><div class="section-heading"><div><h2 id="nodes-title">模型节点</h2><p>一个当前节点负责定时检测。每个节点都可独立测试，单次测试不会切换当前节点。</p></div></div><button class="button primary" type="button" id="add-node">＋ 新增节点</button></div>
         <div id="node-list" aria-live="polite"></div>
         <p class="field-note">更换当前节点不影响已发出的请求。后台同一时刻执行一轮检测，防止重复消耗额度。</p>
+      </section>
+
+      <section id="guest-records" class="panel settings-panel admin-settings" aria-labelledby="guest-records-title">
+        <div class="nodes-heading"><div class="section-heading"><div><h2 id="guest-records-title">访客检测记录</h2><p>脱敏检测历史保留 30 天，最多 10,000 条；公开结果仍保留 1 小时。API Key 和完整接口地址不入档。</p></div></div><button id="guest-records-refresh" class="button secondary" type="button">刷新记录</button></div>
+        <div class="guest-records-toolbar">
+          <div><label for="guest-records-status">整轮状态</label><select id="guest-records-status"><option value="all">全部状态</option><option value="error">执行异常</option><option value="invalid">校验未通过</option><option value="passed">全部通过</option><option value="running">检测中</option><option value="queued">排队中</option></select></div>
+          <div><label for="guest-records-test">检测项目</label><select id="guest-records-test"><option value="all">全部项目</option><option value="pelican">含鹈鹕</option><option value="candy">含糖果</option></select></div>
+          <p id="guest-records-summary" role="status" aria-live="polite">登录后读取记录</p>
+        </div>
+        <p id="guest-records-error" class="form-message error" role="alert" hidden></p>
+        <div id="guest-records-loading" hidden aria-label="正在读取访客记录"><span></span><span></span><span></span></div>
+        <p id="guest-records-empty" class="field-note" hidden>当前没有访客检测记录。访客提交检测后，可在这里查看执行情况。</p>
+        <div id="guest-records-table-wrap" hidden><table class="guest-records-table"><caption class="visually-hidden">访客检测历史及执行详情</caption><thead><tr><th scope="col">提交时间 / 任务</th><th scope="col">模型 / 接口</th><th scope="col">检测结果</th><th scope="col">执行耗时</th><th scope="col">诊断详情</th></tr></thead><tbody id="guest-records-list"></tbody></table></div>
+        <div class="guest-records-pagination"><button id="guest-records-prev" class="button secondary" type="button" disabled>上一页</button><span id="guest-records-page" role="status">第 1 / 1 页</span><button id="guest-records-next" class="button secondary" type="button" disabled>下一页</button></div>
       </section>
 
       <section id="provider-editor" class="panel settings-panel admin-settings" hidden aria-labelledby="provider-title"><form id="provider-form" autocomplete="off">
@@ -55,7 +69,7 @@
           <label for="promotion-action-input">按钮文字</label><input id="promotion-action-input" maxlength="16" placeholder="访问中转站">
           <div class="promotion-preview" aria-label="推广位预览"><div><strong id="promotion-preview-title">GGUUAI API</strong><p id="promotion-preview-description"></p></div><span id="promotion-preview-action">访问中转站</span></div>
           </div></section>
-        <div class="admin-actions"><div><p id="admin-message" class="form-message" role="status" aria-live="polite"></p><p class="field-note">访客凭据不保存；仅脱敏结果公开保留 1 小时。</p></div><div class="action-buttons"><button class="button secondary" type="button" id="admin-run">测试当前节点一次</button><button class="button primary" type="submit" id="admin-save">保存系统配置</button></div></div>
+        <div class="admin-actions"><div><p id="admin-message" class="form-message" role="status" aria-live="polite"></p><p class="field-note">访客凭据不保存；脱敏历史后台保留 30 天，公开结果保留 1 小时。</p></div><div class="action-buttons"><button class="button secondary" type="button" id="admin-run">测试当前节点一次</button><button class="button primary" type="submit" id="admin-save">保存系统配置</button></div></div>
       </form>
     </div>
     <footer><span>后台配置修改仅对站点任务生效，访客测试独立执行。</span><a href="/">查看公开观察站 ↗</a></footer>

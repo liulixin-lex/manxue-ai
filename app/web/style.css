@@ -22,4 +22,58 @@
 @media(max-width:520px){.provider-row{flex-direction:column}.provider-row .action-buttons{flex-direction:row}.providers-heading{flex-wrap:wrap}.promotion-preview{gap:14px}.admin-main .admin-actions .action-buttons{display:grid;grid-template-columns:1fr}.brand>span{display:none}.topbar .action-buttons{gap:8px}.topbar .button{font-size:11px;padding:8px}}
 .admin-fields>.toggle-row{align-items:center;justify-content:space-between;gap:20px}.admin-settings .toggle-row input{width:44px;height:44px;min-height:44px;cursor:pointer;z-index:1}.toggle-row .switch{pointer-events:none}
 
+/* Visitor history extends the existing administrative surfaces. */
+#guest-records{margin-block:28px;scroll-margin-top:24px}
+#guest-records .nodes-heading{align-items:flex-start;gap:24px}
+#guest-records .nodes-heading>.button{flex-shrink:0}
+.guest-records-toolbar{display:flex;align-items:flex-end;flex-wrap:wrap;gap:16px;margin-block:20px}
+.guest-records-toolbar>div{min-width:150px}
+.guest-records-toolbar label{display:block;margin:0 0 8px;font-size:12px}
+.guest-records-toolbar select{width:100%;margin:0}
+#guest-records-summary{margin:0 0 12px auto;font-size:12px;color:var(--muted)}
+.guest-records-table{width:100%;border-collapse:collapse;table-layout:fixed;text-align:left;font-size:13px;line-height:1.65}
+.guest-records-table th{font-size:12px;font-weight:600;color:var(--muted);border-bottom:1px solid var(--line);padding:12px 10px}
+.guest-records-table td{vertical-align:top;border-bottom:1px solid var(--line);padding:18px 10px;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.guest-records-table th:first-child{width:20%}
+.guest-records-table th:nth-child(2){width:20%}
+.guest-records-table th:nth-child(3){width:18%}
+.guest-records-table th:nth-child(4){width:16%}
+.guest-records-table th:last-child{width:26%}
+.guest-records-table small{display:block;font-size:12px;color:var(--muted);margin-top:6px}
+.guest-records-table strong{font-weight:600}
+.guest-records-table .guest-record-id{font-family:var(--mono);font-size:11px;user-select:all}
+.guest-record-tests{display:grid;gap:4px;margin-top:8px;font-size:12px}
+.guest-record-details summary{color:var(--green);padding:2px 0;min-height:32px;text-underline-offset:3px}
+.guest-record-details summary:hover{text-decoration:underline}
+.guest-record-detail-body{padding-top:8px;font-size:12px}
+.guest-record-detail-body p{margin:6px 0;line-height:1.8}
+.guest-record-detail-body h3{font-size:13px;margin:18px 0 6px}
+.guest-record-detail-body section+section{border-top:1px solid var(--line);margin-top:16px}
+.guest-record-error{color:#914444}
+.guest-record-attempts{padding-left:18px;margin:10px 0}
+.guest-record-attempts li{margin:6px 0}
+.guest-records-pagination{display:flex;align-items:center;justify-content:center;gap:20px;margin-top:24px}
+#guest-records-page{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+#guest-records-empty{padding-block:24px}
+#guest-records-loading{display:grid;gap:10px;padding-block:12px}
+#guest-records-loading span{display:block;height:28px;background:var(--mint)}
+.visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
+@media(max-width:800px){
+  .guest-records-table thead{display:none}
+  .guest-records-table,.guest-records-table tbody{display:block}
+  .guest-records-table tr{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;padding-block:20px;border-bottom:1px solid var(--line)}
+  .guest-records-table td{display:block;min-width:0;border:0;padding:0}
+  .guest-records-table td::before{content:attr(data-label);display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+  .guest-records-table td:last-child{grid-column:1 / -1}
+  .guest-records-table td:last-child::before{display:none}
+  #guest-records-summary{flex-basis:100%;margin:0}
+}
+@media(max-width:520px){
+  #guest-records .nodes-heading{flex-wrap:wrap;gap:12px}
+  .guest-records-toolbar{gap:12px}
+  .guest-records-toolbar>div{min-width:0;flex:1}
+  .guest-records-pagination{gap:12px}
+  .guest-records-pagination .button{min-height:44px}
+}
+
 .admin-main footer{font-size:11px}.admin-main .page-head>.badge{font-size:11px}.admin-main .toggle-row small,.admin-main .toggle-row b,.admin-next small{font-size:11px}.admin-main input,.admin-main select{color:var(--ink)}.admin-main input::placeholder{color:#52665a;opacity:1}.saved-settings>div{font-size:11px!important}.saved-settings strong{font-size:12px!important}dialog{border:0;border-radius:4px}input:focus{box-shadow:none;outline:2px solid #426d56;outline-offset:2px}

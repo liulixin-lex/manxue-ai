@@ -34,6 +34,8 @@ INTERVAL = 30 * 60
 MAX_RESPONSE = 2 * 1024 * 1024
 # Cap total SSE bytes; individual events are parsed and discarded incrementally.
 MAX_STREAM_RESPONSE = 16 * 1024 * 1024
+GUEST_HISTORY_DAYS = 30
+GUEST_HISTORY_LIMIT = 10000
 DEFAULTS = dict(base_url="https://api.example.com/v1", model="gpt-6-astra",
                 effort="medium", protocol="responses", api_key="", enabled=False, next_run=None,
                 interval_minutes=30, timeout_seconds=300, max_output_tokens=16000, guest_enabled=True, retry_count=2, review_timeout_seconds=240, review_effort="inherit", review_format="auto", judge_node_id=None,
@@ -716,7 +718,7 @@ def perform_test(config, prompt, nonce, model_call, kind="pelican", on_progress=
     attempts_log = []
     output, svg, checks, usage, returned_model = "", "", {}, {}, ""
     review, error_code, stage = None, None, 'generation'
-    config = dict(config, _nonce=nonce)
+    config = dict(config, _nonce=nonce, _test_kind=kind)
     display_only = kind == 'pelican' and not config.get('_guest') and not config.get('review_enabled', True)
     if '_deadline' not in config:
         config['_deadline'] = time.monotonic() + config['timeout_seconds'] + 45 + config.get('review_timeout_seconds',240)
@@ -884,12 +886,19 @@ class Monitor:
                 CREATE TABLE IF NOT EXISTS admin_auth (id INTEGER PRIMARY KEY CHECK(id=1), salt TEXT NOT NULL, password_hash TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS guest_results (id TEXT PRIMARY KEY, created REAL NOT NULL, result TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS guest_created ON guest_results(created);
+                CREATE TABLE IF NOT EXISTS guest_history (
+                    id TEXT PRIMARY KEY, submitted REAL NOT NULL, status TEXT NOT NULL,
+                    test_type TEXT NOT NULL, result TEXT NOT NULL);
+                CREATE INDEX IF NOT EXISTS guest_history_submitted ON guest_history(submitted DESC,id);
             """)
             # Credentials are deliberately memory-only; restart never silently retries a billed request.
             for row in db.execute("SELECT id,result FROM guest_results WHERE json_extract(result,'$.status') IN ('queued','running')").fetchall():
                 result = json.loads(row["result"])
                 self.fail_guest(result, "服务重启，访客任务已中断，请重新提交")
                 db.execute("UPDATE guest_results SET created=?,result=? WHERE id=?", (time.time(), json.dumps(result), row["id"]))
+            # Preserve the sanitized records still available at upgrade, without inventing diagnostics.
+            for row in db.execute("SELECT result FROM guest_results").fetchall():
+                self.write_guest_history(db, json.loads(row[0]))
             columns = {r[1] for r in db.execute("PRAGMA table_info(runs)")}
             if 'lease_until' not in columns:
                 db.execute("ALTER TABLE runs ADD COLUMN lease_until REAL")
@@ -1370,6 +1379,9 @@ class Monitor:
         published = dict(id=secrets.token_hex(12), status="queued", submitted=time.time(), started=None, finished=None,
                          scene=scene, model=redact(config["model"], config), effort=config["effort"], test_type=test_type,
                          api_masked=mask(host), checks={}, svg="", tests={name:{"status":"queued"} for name in kinds})
+        published['_diagnostics'] = {key: config[key] for key in ('protocol', 'timeout_seconds', 'max_output_tokens', 'retry_count')}
+        published['_diagnostics']['tests'] = {}
+        config['_guest_id'] = published['id']
         return config, nonce, published
 
     def submit_guest(self, values):
@@ -1384,6 +1396,7 @@ class Monitor:
                     self.guest_workers.append(worker)
             with self.db() as db:
                 db.execute("INSERT INTO guest_results VALUES (?,?,?)", (published["id"], published["submitted"], json.dumps(published)))
+                self.write_guest_history(db, published)
             accepted = self.guest_view(published)
             self.guest_queue.put_nowait((config, nonce, published))
         return accepted
@@ -1397,7 +1410,7 @@ class Monitor:
             try:
                 self.execute_guest(config, nonce, published)
             except Exception:
-                self.fail_guest(published, "访客任务执行异常，请重新提交")
+                self.fail_guest(published, "访客任务执行异常，请重新提交", 'worker_error')
                 try:
                     self.store_guest(published)
                 except Exception:
@@ -1407,21 +1420,24 @@ class Monitor:
                 self.guest_queue.task_done()
 
     @staticmethod
-    def fail_guest(published, reason):
+    def fail_guest(published, reason, code='interrupted'):
         published.update(status="error", finished=time.time())
-        for test in published["tests"].values():
+        for name, test in published["tests"].items():
             if test["status"] in ("queued", "running"):
                 test.update(status="error", finished=published["finished"], error=reason)
+                diagnostics = published.setdefault('_diagnostics', {}).setdefault('tests', {}).setdefault(name, {})
+                diagnostics.update(stage='task', error_code=code, attempts_log=diagnostics.get('attempts_log', []))
 
     def store_guest(self, published):
         terminal = published["status"] not in ("queued", "running")
         with self.db() as db:
             db.execute("UPDATE guest_results SET created=?,result=? WHERE id=?",
                        (published["finished"] if terminal else published["submitted"], json.dumps(published), published["id"]))
+            self.write_guest_history(db, published)
 
     def execute_guest(self, config, nonce, published):
         if time.time()-published['submitted'] > 600:
-            self.fail_guest(published,'访客任务排队超过 10 分钟，请重新提交')
+            self.fail_guest(published,'访客任务排队超过 10 分钟，请重新提交', 'queue_expired')
             self.store_guest(published)
             return self.guest_view(published)
         config.update(_cancel=self.stopped, _deadline=time.monotonic()+config['timeout_seconds'])
@@ -1438,6 +1454,7 @@ class Monitor:
                 if test.get("error"):
                     public_test["error"] = guest_error(test["error"]) if test["status"] == "error" else ("最终答案不是明确的 21" if name == "candy" else "SVG 基础校验未通过")
                 published["tests"][name] = public_test
+                published['_diagnostics']['tests'][name] = {key: test[key] for key in ('stage', 'error_code', 'attempts_log') if key in test}
             self.store_guest(published)
         perform_suite(config, build_pelican_prompt(published["scene"], nonce), nonce, self.model_call,
                       published["test_type"], on_result=persist)
@@ -1449,6 +1466,7 @@ class Monitor:
         config, nonce, published = self.prepare_guest(values)
         with self.db() as db:
             db.execute("INSERT INTO guest_results VALUES (?,?,?)",(published["id"],time.time(),json.dumps(published)))
+            self.write_guest_history(db, published)
         return self.execute_guest(config, nonce, published)
 
     def prune_guests(self):
@@ -1456,10 +1474,49 @@ class Monitor:
             terminal = "json_extract(result,'$.status') NOT IN ('queued','running')"
             db.execute("DELETE FROM guest_results WHERE " + terminal + " AND created<?",(time.time()-3600,))
             db.execute("DELETE FROM guest_results WHERE " + terminal + " AND id NOT IN (SELECT id FROM guest_results WHERE " + terminal + " ORDER BY created DESC LIMIT 100)")
+            db.execute("DELETE FROM guest_history WHERE status NOT IN ('queued','running') AND submitted<?", (time.time()-GUEST_HISTORY_DAYS*86400,))
+            db.execute("DELETE FROM guest_history WHERE status NOT IN ('queued','running') AND id NOT IN (SELECT id FROM guest_history ORDER BY submitted DESC,id DESC LIMIT ?)", (GUEST_HISTORY_LIMIT,))
+
+    @staticmethod
+    def write_guest_history(db, result):
+        # A separate metadata archive survives public expiry; never store keys, full URLs, SVG or raw output.
+        record = {key: result.get(key) for key in ('id', 'submitted', 'started', 'finished', 'status', 'test_type', 'model', 'effort', 'api_masked', 'scene')}
+        diagnostics = result.get('_diagnostics', {})
+        record.update({key: diagnostics.get(key) for key in ('protocol', 'timeout_seconds', 'max_output_tokens', 'retry_count')})
+        record['diagnostics_available'] = bool(diagnostics.get('protocol'))
+        record['tests'] = {}
+        for name, test in result.get('tests', {}).items():
+            item = {key: test[key] for key in ('status', 'started', 'finished', 'attempts', 'checks', 'error', 'generation_usage', 'evaluation_level') if key in test}
+            detail = diagnostics.get('tests', {}).get(name, {})
+            item.update({key: detail.get(key) for key in ('stage', 'error_code')})
+            item['attempts_log'] = [{key: attempt[key] for key in ('stage', 'attempt', 'status', 'error_code', 'duration_seconds', 'retry_skipped') if key in attempt} for attempt in detail.get('attempts_log', [])]
+            record['tests'][name] = item
+        db.execute('INSERT INTO guest_history VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,result=excluded.result',
+                   (record['id'], record['submitted'], record['status'], record['test_type'], json.dumps(record)))
+
+    def admin_guest_history(self, page=1, status='all', test='all'):
+        if type(page) is not int or not 1 <= page <= 1000000 or status not in ('all', 'queued', 'running', 'passed', 'invalid', 'error') or test not in ('all', 'pelican', 'candy'):
+            raise ValueError('访客记录分页或筛选参数无效')
+        conditions = ["(submitted>=? OR status IN ('queued','running'))"]
+        values = [time.time()-GUEST_HISTORY_DAYS*86400]
+        if status != 'all':
+            conditions.append('status=?')
+            values.append(status)
+        if test != 'all':
+            conditions.append("test_type IN (?, 'both')")
+            values.append(test)
+        where = ' AND '.join(conditions)
+        with self.db() as db:
+            total = db.execute('SELECT count(*) FROM guest_history WHERE '+where, values).fetchone()[0]
+            pages = max(1, math.ceil(total/20))
+            page = min(page, pages)
+            rows = db.execute('SELECT result FROM guest_history WHERE '+where+' ORDER BY submitted DESC,id DESC LIMIT 20 OFFSET ?', (*values, (page-1)*20)).fetchall()
+        return dict(items=[json.loads(row[0]) for row in rows], total=total, page=page, pages=pages, page_size=20, retention_days=GUEST_HISTORY_DAYS, max_records=GUEST_HISTORY_LIMIT)
 
     @staticmethod
     def guest_view(result):
         public = dict(result)
+        public.pop('_diagnostics', None)
         public["has_svg"] = bool(public.pop("svg"))
         public["tests"] = {name: {key:value for key,value in test.items() if key != "review"} for name,test in public.get("tests", {}).items()}
         public["error"] = "；".join(("鹈鹕：" if name == "pelican" else "糖果：") + test["error"] for name,test in public.get("tests",{}).items() if test.get("error"))
@@ -1677,6 +1734,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(monitor.nodes())
                 if url.path == "/api/admin/review-providers":
                     return self.send(monitor.review_providers())
+                if url.path == '/api/admin/guest-records':
+                    params = parse.parse_qs(url.query)
+                    try:
+                        return self.send(monitor.admin_guest_history(int(params.get('page', ['1'])[0]), params.get('status', ['all'])[0], params.get('test', ['all'])[0]))
+                    except ValueError:
+                        return self.send({'error': '访客记录分页或筛选参数无效'}, status=400)
             if url.path == "/api/state":
                 return self.send(monitor.state())
             if url.path == "/api/runs":
@@ -1702,7 +1765,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not match[2]:
                         return self.send(monitor.serialize(row, detail=True))
             return self.send({"error": "未找到记录"}, status=404)
-        files = {"/": "index.html", "/admin": "admin.html", "/admin/": "admin.html", "/admin.js": "admin.js", "/providers.js": "providers.js", "/privacy.js": "privacy.js", "/app.js": "app.js", "/style.css": "style.css", "/observatory.css": "observatory.css", "/vendor/gsap.min.js": "vendor/gsap.min.js", "/favicon.svg": "favicon.svg"}
+        files = {"/": "index.html", "/admin": "admin.html", "/admin/": "admin.html", "/admin.js": "admin.js", "/guest-records.js": "guest-records.js", "/providers.js": "providers.js", "/privacy.js": "privacy.js", "/app.js": "app.js", "/style.css": "style.css", "/observatory.css": "observatory.css", "/vendor/gsap.min.js": "vendor/gsap.min.js", "/favicon.svg": "favicon.svg"}
         name = files.get(url.path)
         if name:
             types = {"html": "text/html", "js": "text/javascript", "css": "text/css", "svg": "image/svg+xml"}

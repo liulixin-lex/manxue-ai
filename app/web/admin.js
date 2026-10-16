@@ -7,6 +7,7 @@ async function api(path, body) {
   if (response.status === 401 && !path.startsWith('/api/auth/')) {
     token = ''; $('logout').hidden = true;
     $('admin-content').hidden = true;
+    clearGuestRecords();
     if (!$('auth-dialog').open) $('auth-dialog').showModal();
     throw new Error('请输入正确的管理口令');
   }
@@ -149,6 +150,7 @@ $('auth-form').addEventListener('submit', async event => {
     showConfig(await api('/api/admin/settings'));
     await refreshNodes(); await refreshProviders();
     $('auth-dialog').close(); $('admin-token').value = ''; $('confirm-password').value = ''; $('auth-error').textContent = '';
+    refreshGuestRecords();
   } catch (error) { token = ''; $('auth-error').textContent = error.message; }
   finally { $('auth-submit').disabled = false; }
 });
@@ -157,6 +159,7 @@ $('logout').addEventListener('click', async () => {
   finally {
     token = ''; config = undefined; nodes = []; nodeSignature = ''; $('node-list').replaceChildren();
     clearProviders();
+    clearGuestRecords();
     privacy.clear($('admin-url')); privacy.clear($('admin-key'));
     $('admin-content').hidden = true; $('logout').hidden = true;
     await load();

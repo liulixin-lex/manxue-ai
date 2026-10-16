@@ -42,7 +42,7 @@
         <div class="guest-layout"><section class="panel settings-panel" aria-label="自测设置"><form id="guest-form" autocomplete="off">
             <label for="base-url">API 地址</label><input id="base-url" type="text" placeholder="example.com 或 https://example.com/v1" required autocomplete="off" maxlength="2048" spellcheck="false" data-secret>
             <label for="api-key">API Key</label><input id="api-key" type="text" placeholder="仅用于本次请求" required autocomplete="off" maxlength="4096" spellcheck="false" data-secret>
-            <p class="field-note">结果公开保留 1 小时，密钥不会公开。</p>
+            <p class="field-note">结果公开保留 1 小时；脱敏检测记录供管理员排障保留 30 天，最多 10,000 条。密钥和完整接口地址不入档。</p>
             <label for="test-type">检测项目</label><select id="test-type"><option value="both">鹈鹕 + 糖果（两项）</option><option value="pelican">仅鹈鹕（单项）</option><option value="candy">仅糖果（单项）</option></select><label for="model">模型名称</label><input id="model" value="gpt-6-astra" required maxlength="120" autocomplete="off">
             <div class="form-row"><div><label for="effort">思考强度</label><select id="effort"><option>low</option><option selected>medium</option><option>high</option><option>xhigh</option></select></div><div><label for="protocol">接口协议</label><select id="protocol"><option value="responses">Responses</option><option value="chat">Chat Completions</option></select></div></div>
             <label for="guest-retries">失败重试次数</label><select id="guest-retries"><option value="0">不重试</option><option value="1">重试 1 次</option><option value="2" selected>重试 2 次（最多 3 次请求）</option><option value="3">重试 3 次</option><option value="5">重试 5 次</option></select>

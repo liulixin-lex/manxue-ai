@@ -31,6 +31,7 @@
 !/app/web/admin.html
 !/app/web/app.js
 !/app/web/admin.js
+!/app/web/guest-records.js
 !/app/web/providers.js
 !/app/web/privacy.js
 !/app/web/style.css
