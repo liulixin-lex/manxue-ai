@@ -44,6 +44,8 @@
           <label for="retry-count">后台失败重试次数</label><input id="retry-count" type="number" min="0" max="5" step="1" required><p class="field-note">默认重试 2 次，最多请求 3 次；仅重试临时请求故障，所有尝试共用本项超时预算。</p>
           <label class="toggle-row" for="admin-enabled"><span><b>启用后台自动检测</b><small>暂停后仍可由管理员单次检测</small></span><input type="checkbox" id="admin-enabled" role="switch"><span class="switch" aria-hidden="true"></span></label>
           <label class="toggle-row" for="guest-enabled"><span><b>开放访客独立测试</b><small>使用访客当次提交的接口和密钥</small></span><input type="checkbox" id="guest-enabled" role="switch"><span class="switch" aria-hidden="true"></span></label>
+          <div class="form-row"><div><label for="guest-default-timeout">访客基础预算 / 秒</label><input id="guest-default-timeout" type="number" min="60" max="3600" step="1" required></div><div><label for="guest-default-tokens">访客基础 Token 上限</label><input id="guest-default-tokens" type="number" min="1024" max="128000" step="1" required></div></div>
+          <p class="field-note">访客独立配置，默认 1200 秒 / 32768 token。自动模式按 effort 放大：high 为 1.5 倍、xhigh 为 2 倍，上限 3600 秒 / 128000 token；访客可手动选择。</p>
           <div class="admin-next"><span>下次后台检测</span><strong id="admin-next">尚未启用</strong><small>北京时间 UTC+8</small></div></div>
         </section>
 

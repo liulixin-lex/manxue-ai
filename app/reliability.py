@@ -137,7 +137,7 @@ def request_with_retries(config, prompt, model_call, stage, attempts):
                 failure.stage = stage
             attempt.update(status='error', error_code=failure.code,
                            duration_seconds=round(time.monotonic()-started, 3))
-            context = {'task_id': config['_guest_id'], 'test': config['_test_kind']} if config.get('_guest_id') else {}
+            context = {'task_id': config['_guest_id'], 'test': config.get('_test_kind', 'generation')} if config.get('_guest_id') else {}
             event(stage, failure.code, attempt=attempt['attempt'], **context)
             delay = max(random.uniform(.5, 1) * min(2**index, 8), failure.retry_after or 0)
             minimum = config.get('_minimum_retry_seconds', 0)

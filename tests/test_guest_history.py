@@ -42,7 +42,7 @@ class GuestHistoryTests(unittest.TestCase):
         record = self.monitor.admin_guest_history()['items'][0]
         self.assertTrue(record['diagnostics_available'])
         self.assertEqual('responses', record['protocol'])
-        self.assertEqual(300, record['timeout_seconds'])
+        self.assertEqual(2400, record['timeout_seconds'])
         self.assertEqual('error', record['status'])
         self.assertEqual('passed', record['tests']['candy']['status'])
         self.assertEqual('http_524', record['tests']['pelican']['error_code'])

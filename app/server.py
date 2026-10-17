@@ -36,9 +36,13 @@ MAX_RESPONSE = 2 * 1024 * 1024
 MAX_STREAM_RESPONSE = 16 * 1024 * 1024
 GUEST_HISTORY_DAYS = 30
 GUEST_HISTORY_LIMIT = 10000
+GUEST_MAX_TIMEOUT = 3600
+GUEST_MAX_TOKENS = 128000
+GUEST_EFFORT_SCALE = {'omit': 1, 'none': 1, 'minimal': 1, 'low': 1, 'medium': 1, 'high': 1.5, 'xhigh': 2}
 DEFAULTS = dict(base_url="https://api.example.com/v1", model="gpt-6-astra",
                 effort="medium", protocol="responses", api_key="", enabled=False, next_run=None,
                 interval_minutes=30, timeout_seconds=300, max_output_tokens=16000, guest_enabled=True, retry_count=2, review_timeout_seconds=240, review_effort="inherit", review_format="auto", judge_node_id=None,
+                guest_timeout_seconds=1200, guest_max_output_tokens=32768,
                 review_enabled=True, review_mode="self", review_provider_id=None, promotion_enabled=False,
                 promotion_title="GGUUAI API", promotion_description="", promotion_url="", promotion_action="访问中转站")
 NODE_FIELDS = ("base_url", "api_key", "model", "effort", "protocol")
@@ -150,7 +154,7 @@ def promotion_url(value):
     return value
 
 
-def validate_settings(values, old):
+def validate_settings(values, old, guest=False):
     if not isinstance(values, dict):
         raise ValueError("设置必须为 JSON 对象")
     new = old.copy()
@@ -183,7 +187,8 @@ def validate_settings(values, old):
     new["base_url"] = base
     if not new["model"] or len(new["model"]) > 120:
         raise ValueError("请输入有效的模型名称")
-    if new["effort"] not in ("low", "medium", "high", "xhigh") or new["protocol"] not in ("responses", "chat"):
+    efforts = GUEST_EFFORT_SCALE if guest else ('low', 'medium', 'high', 'xhigh')
+    if new["effort"] not in efforts or new["protocol"] not in ("responses", "chat"):
         raise ValueError("思考强度或接口协议不正确")
     if any(ord(c) < 32 or ord(c) > 126 for c in new["api_key"]):
         raise ValueError("API Key 格式不正确")
@@ -192,7 +197,7 @@ def validate_settings(values, old):
             if not isinstance(values[key], bool):
                 raise ValueError("开关必须为布尔值")
             new[key] = values[key]
-    for key, low, high in (("interval_minutes", 1, 1440), ("timeout_seconds", 10, 600), ("max_output_tokens", 1024, 64000), ("retry_count", 0, 5), ("review_timeout_seconds", 10, 300)):
+    for key, low, high in (("interval_minutes", 1, 1440), ("timeout_seconds", 60 if guest else 10, GUEST_MAX_TIMEOUT if guest else 600), ("max_output_tokens", 1024, GUEST_MAX_TOKENS if guest else 64000), ("retry_count", 0, 5), ("review_timeout_seconds", 10, 300), ("guest_timeout_seconds", 60, GUEST_MAX_TIMEOUT), ("guest_max_output_tokens", 1024, GUEST_MAX_TOKENS)):
         if key in values:
             if type(values[key]) is not int or not low <= values[key] <= high:
                 raise ValueError(f"{key} 必须为 {low}–{high} 的整数")
@@ -249,7 +254,7 @@ def public_addresses(url):
     return parsed, ips
 
 
-def read_response(response, sock, deadline, limit, streaming=False, review_frames=0):
+def read_response(response, sock, deadline, limit, streaming=False, review_frames=0, idle_timeout=90):
     chunks, size = [], 0
     pending = b''
     stream_mode = None
@@ -264,7 +269,7 @@ def read_response(response, sock, deadline, limit, streaming=False, review_frame
                 return recovered
             raise TimeoutError()
         # A completed review message may survive a gateway dropping the final event.
-        sock.settimeout(min(remaining, 5 if recover() is not None else 90))
+        sock.settimeout(min(remaining, 5 if recover() is not None else idle_timeout or remaining))
         try:
             chunk = response.read1(min(65536, limit + 1 - size))
         except (TimeoutError, ConnectionError, http.client.IncompleteRead):
@@ -389,7 +394,8 @@ def public_post(url, body, headers, timeout, limit=MAX_RESPONSE, streaming=False
         if response.status != 200:
             delay = retry_delay(response.getheader('Retry-After'))
             raise StageError('request',f'http_{response.status}',f"HTTP {response.status}：上游请求失败",response.status in (408,429) or 500 <= response.status < 600,delay)
-        return read_response(response, sock, deadline, limit, streaming, review_frames)
+        # Reasoning may produce no bytes for minutes. The parent process still enforces the total deadline.
+        return read_response(response, sock, deadline, limit, streaming, review_frames, idle_timeout=None)
     finally:
         conn.close()
 
@@ -781,8 +787,23 @@ def perform_test(config, prompt, nonce, model_call, kind="pelican", on_progress=
     return snapshot(status,message)
 
 
-def guest_error(message):
+def guest_error(message, code=None):
     # Only publish fixed diagnoses, never arbitrary exception text or upstream bodies.
+    diagnoses = {
+        'deadline': '本轮检测已达到总时间预算，请提高时间预算或降低思考强度后重新检测',
+        'generation_timeout': '生成阶段已达到时间预算，请提高时间预算后重新检测',
+        'request_timeout': '本次请求已达到时间预算，请提高时间预算后重新检测',
+        'queue_timeout': '等待请求并发名额超时，请稍后重试',
+        'cancelled': '服务停止或检测被取消，请重新提交',
+        'output_incomplete': '模型输出未完成，请提高输出 Token 上限或检查上游状态',
+        'timeout': '上游等待超时，请提高时间预算或检查接口服务',
+        'upstream_failure': '上游生成失败，请稍后重试或检查接口服务商状态',
+        'stream_incomplete': '上游流式响应中断，未收到完整结果，请重试或检查接口服务商状态',
+        'http_400': 'HTTP 400：接口不支持当前请求参数，请检查模型、effort 和输出长度参数',
+        'structured_unsupported': '上游不支持当前输出格式，请检查协议',
+    }
+    if code in diagnoses:
+        return diagnoses[code]
     if match := re.match(r"HTTP (\d{3})：", message):
         reasons = {401:"API Key 无效或已过期", 403:"接口拒绝访问，请检查 Key 权限或网关限制",
                    404:"接口不存在，请检查地址和协议", 429:"请求限流或额度不足", 524:"上游网关响应超时"}
@@ -1359,14 +1380,27 @@ class Monitor:
                     recovery_pending=len(self.pending_failures)+len(self.pending_results))
 
     def prepare_guest(self, values):
-        if not self.settings()["guest_enabled"]:
+        settings = self.settings()
+        if not settings["guest_enabled"]:
             raise ValueError("访客检测暂未开放")
-        allowed = {"base_url", "api_key", "model", "effort", "protocol", "test_type", "retry_count"}
+        allowed = {"base_url", "api_key", "model", "effort", "protocol", "test_type", "retry_count", "timeout_seconds", "max_output_tokens", "token_field"}
         if set(values) - allowed:
             raise ValueError("访客请求包含不支持的字段")
         if any(not isinstance(values.get(k),str) or not values[k].strip() for k in ("base_url","api_key")):
             raise ValueError("请填写你自己的 API 地址和 API Key")
-        config = validate_settings(values, DEFAULTS)
+        scale = GUEST_EFFORT_SCALE.get(values.get('effort', DEFAULTS['effort']))
+        if scale is None:
+            raise ValueError('请选择有效的思考强度')
+        guest_defaults = dict(DEFAULTS,
+            timeout_seconds=min(GUEST_MAX_TIMEOUT, round(settings['guest_timeout_seconds']*scale)),
+            max_output_tokens=min(GUEST_MAX_TOKENS, round(settings['guest_max_output_tokens']*scale)))
+        config = validate_settings(values, guest_defaults, guest=True)
+        token_field = values.get('token_field', 'max_completion_tokens')
+        if token_field not in ('max_completion_tokens', 'max_tokens'):
+            raise ValueError('请选择有效的输出长度参数')
+        config['token_field'] = token_field
+        # Retry early transient failures, but do not issue almost-expired duplicate generations.
+        config['_minimum_retry_seconds'] = min(120, config['timeout_seconds']/4)
         test_type = values.get("test_type", "both")
         if test_type not in ("both", "pelican", "candy"):
             raise ValueError("请选择有效的检测项目")
@@ -1379,7 +1413,8 @@ class Monitor:
         published = dict(id=secrets.token_hex(12), status="queued", submitted=time.time(), started=None, finished=None,
                          scene=scene, model=redact(config["model"], config), effort=config["effort"], test_type=test_type,
                          api_masked=mask(host), checks={}, svg="", tests={name:{"status":"queued"} for name in kinds})
-        published['_diagnostics'] = {key: config[key] for key in ('protocol', 'timeout_seconds', 'max_output_tokens', 'retry_count')}
+        published.update(protocol=config['protocol'], timeout_seconds=config['timeout_seconds'], max_output_tokens=config['max_output_tokens'])
+        published['_diagnostics'] = {key: config[key] for key in ('protocol', 'timeout_seconds', 'max_output_tokens', 'retry_count', 'token_field')}
         published['_diagnostics']['tests'] = {}
         config['_guest_id'] = published['id']
         return config, nonce, published
@@ -1452,7 +1487,7 @@ class Monitor:
                 if name == "candy":
                     public_test["output"] = test.get("output", "")
                 if test.get("error"):
-                    public_test["error"] = guest_error(test["error"]) if test["status"] == "error" else ("最终答案不是明确的 21" if name == "candy" else "SVG 基础校验未通过")
+                    public_test["error"] = guest_error(test["error"], test.get('error_code')) if test["status"] == "error" else ("最终答案不是明确的 21" if name == "candy" else "SVG 基础校验未通过")
                 published["tests"][name] = public_test
                 published['_diagnostics']['tests'][name] = {key: test[key] for key in ('stage', 'error_code', 'attempts_log') if key in test}
             self.store_guest(published)
@@ -1482,7 +1517,7 @@ class Monitor:
         # A separate metadata archive survives public expiry; never store keys, full URLs, SVG or raw output.
         record = {key: result.get(key) for key in ('id', 'submitted', 'started', 'finished', 'status', 'test_type', 'model', 'effort', 'api_masked', 'scene')}
         diagnostics = result.get('_diagnostics', {})
-        record.update({key: diagnostics.get(key) for key in ('protocol', 'timeout_seconds', 'max_output_tokens', 'retry_count')})
+        record.update({key: diagnostics.get(key) for key in ('protocol', 'timeout_seconds', 'max_output_tokens', 'retry_count', 'token_field')})
         record['diagnostics_available'] = bool(diagnostics.get('protocol'))
         record['tests'] = {}
         for name, test in result.get('tests', {}).items():
@@ -1620,6 +1655,8 @@ class Monitor:
         completed = [r for r in current if r["candy_status"] != "running"]
         settings = self.settings(public=True)
         public = {key: settings[key] for key in ("base_url", "model", "effort", "enabled", "next_run", "interval_minutes", "guest_enabled", "node_name", "active_node_id", "review_enabled")}
+        public.update(guest_timeout_seconds=settings['guest_timeout_seconds'], guest_max_output_tokens=settings['guest_max_output_tokens'],
+                      guest_max_timeout=GUEST_MAX_TIMEOUT, guest_max_tokens=GUEST_MAX_TOKENS, guest_effort_scale=GUEST_EFFORT_SCALE)
         promotion = {key.removeprefix('promotion_'): settings[key] for key in
                      ('promotion_title', 'promotion_description', 'promotion_action', 'promotion_url')} if settings['promotion_enabled'] else None
         pelican_runs = [r for r in results if r['test_version'] >= 3 and r['tests'].get('pelican')]
