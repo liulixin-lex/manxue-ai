@@ -114,6 +114,7 @@ function renderState() {
   $('footer-frequency').textContent = `每 ${config.interval_minutes} 分钟检测`;
   $('run').disabled = guestBusy || !config.guest_enabled;
   if (!guestBusy) $('run').innerHTML = config.guest_enabled ? '开始检测' : '访客检测暂未开放';
+  updateGuestBudget();
   renderCandyGrid();
   updateClock();
 }
@@ -319,11 +320,24 @@ async function refresh(reset = false, expand = false) {
 }
 
 privacy.bind(document);
+function updateGuestBudget() {
+  const settings = state?.settings;
+  if (!settings) return;
+  const scale = settings.guest_effort_scale[$('effort').value] || 1;
+  const seconds = $('guest-timeout').value === 'auto' ? Math.min(settings.guest_max_timeout, Math.round(settings.guest_timeout_seconds*scale)) : Number($('guest-timeout').value);
+  const tokens = $('guest-max-tokens').value === 'auto' ? Math.min(settings.guest_max_tokens, Math.round(settings.guest_max_output_tokens*scale)) : Number($('guest-max-tokens').value);
+  $('guest-budget-note').textContent = `本轮预算 ${seconds/60} 分钟，输出上限 ${tokens.toLocaleString('zh-CN')} token。两项并行检测，预算不随重试次数叠加；上游可能计入推理 token，请按模型限制选择。`;
+  $('guest-token-field-row').hidden = $('protocol').value !== 'chat';
+}
+for (const id of ['effort', 'guest-timeout', 'guest-max-tokens', 'protocol']) $(id).addEventListener('change', updateGuestBudget);
 let guestSignature = "";
 $('guest-form').addEventListener('submit', async event => {
   event.preventDefault();
   if (guestBusy || !$('guest-form').reportValidity()) return;
   const values = {base_url:privacy.read($('base-url')), api_key:privacy.read($('api-key')), model:$('model').value.trim(), effort:$('effort').value, protocol:$('protocol').value, test_type:$('test-type').value,retry_count:Number($('guest-retries').value)};
+  if ($('guest-timeout').value !== 'auto') values.timeout_seconds = Number($('guest-timeout').value);
+  if ($('guest-max-tokens').value !== 'auto') values.max_output_tokens = Number($('guest-max-tokens').value);
+  if (values.protocol === 'chat') values.token_field = $('guest-token-field').value;
   if (!values.base_url || !values.api_key) { message('请填写你自己的 API 地址和 API Key。', true); return; }
   guestBusy = true; $('run').disabled = true; $('run').textContent = '正在提交…';
   message('正在提交访客任务…');
@@ -331,7 +345,7 @@ $('guest-form').addEventListener('submit', async event => {
     const result = await api('/api/guest/run', values);
     guestSignature = '';
     await refresh();
-    message(`任务 #${result.id} 已提交`);
+    message(`任务 #${result.id} 已提交，执行预算 ${result.timeout_seconds/60} 分钟。可留在页面等待结果。`);
   } catch (error) { message(error.message, true); }
   finally {
     values.base_url = ''; values.api_key = '';
@@ -367,6 +381,7 @@ function addGuestPelican(result) {
   const pelican=result.tests.pelican;
   const card=document.createElement('article');card.className='guest-result';
   card.innerHTML=`<div class="guest-result-head"><strong>访客鹈鹕</strong>${badge(pelican.status)}</div>${testSummary({pelican},false)}<p>${date(result.submitted || result.started)} · ${escapeHTML(result.model)} · ${escapeHTML(result.effort)}</p><p>API：${escapeHTML(result.api_masked || '未记录')}</p><p>${escapeHTML(result.scene)} · 校验码${result.checks.nonce ? '一致' : ['queued','running'].includes(pelican.status) ? '待检测' : '未通过'}</p>${pelican.error ? `<p class="guest-error">${escapeHTML(pelican.error)}</p>` : ''}${result.has_svg ? '<button class="guest-preview" aria-label="放大访客鹈鹕动画"><img alt="访客测试生成的鹈鹕动画"></button><a class="guest-download" download="guest-pelican.svg">下载 SVG ↓</a>' : ''}`;
+  if (result.timeout_seconds) card.querySelector('.guest-result-head').insertAdjacentHTML('afterend', `<p>时间预算 ${Number(result.timeout_seconds)/60} 分钟 · 输出上限 ${Number(result.max_output_tokens).toLocaleString('zh-CN')} token</p>`);
   card.querySelector('.guest-result-head').insertAdjacentHTML('afterend',tokenUsage(pelican));
   if (result.has_svg) {
     const url=`/api/guest/results/${result.id}/svg`;

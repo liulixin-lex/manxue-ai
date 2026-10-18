@@ -7,6 +7,7 @@ async function api(path, body) {
   if (response.status === 401 && !path.startsWith('/api/auth/')) {
     token = ''; $('logout').hidden = true;
     $('admin-content').hidden = true;
+    clearGuestRecords();
     if (!$('auth-dialog').open) $('auth-dialog').showModal();
     throw new Error('请输入正确的管理口令');
   }
@@ -28,6 +29,8 @@ function showConfig(data) {
   $('max-tokens').value = config.max_output_tokens;
   $('admin-enabled').checked = config.enabled;
   $('guest-enabled').checked = config.guest_enabled;
+  $('guest-default-timeout').value = config.guest_timeout_seconds;
+  $('guest-default-tokens').value = config.guest_max_output_tokens;
   $('admin-content').hidden = false;
   $('logout').hidden = false;
   $('admin-status').className = `badge ${config.enabled ? 'passed' : 'neutral'}`;
@@ -126,7 +129,7 @@ $('admin-form').addEventListener('submit', event => {
   event.preventDefault();
   if (!$('admin-form').reportValidity()) return;
   action(async () => {
-    const values = {review_enabled:$('review-enabled').checked,review_effort:$('review-effort').value,review_format:$('review-format').value,review_mode:$('review-mode').value,review_provider_id:$('review-provider').value ? Number($('review-provider').value) : null,...promotionValues(),review_timeout_seconds:Number($('review-timeout').value),retry_count:Number($('retry-count').value),interval_minutes:Number($('interval').value), timeout_seconds:Number($('timeout').value), max_output_tokens:Number($('max-tokens').value), enabled:$('admin-enabled').checked, guest_enabled:$('guest-enabled').checked};
+    const values = {review_enabled:$('review-enabled').checked,review_effort:$('review-effort').value,review_format:$('review-format').value,review_mode:$('review-mode').value,review_provider_id:$('review-provider').value ? Number($('review-provider').value) : null,...promotionValues(),review_timeout_seconds:Number($('review-timeout').value),retry_count:Number($('retry-count').value),interval_minutes:Number($('interval').value), timeout_seconds:Number($('timeout').value), max_output_tokens:Number($('max-tokens').value), enabled:$('admin-enabled').checked, guest_enabled:$('guest-enabled').checked,guest_timeout_seconds:Number($('guest-default-timeout').value),guest_max_output_tokens:Number($('guest-default-tokens').value)};
     const result = await api('/api/admin/settings',values);
     showConfig(result);
     message('配置已保存并生效。后续检测使用新配置，无需重启。');
@@ -149,6 +152,7 @@ $('auth-form').addEventListener('submit', async event => {
     showConfig(await api('/api/admin/settings'));
     await refreshNodes(); await refreshProviders();
     $('auth-dialog').close(); $('admin-token').value = ''; $('confirm-password').value = ''; $('auth-error').textContent = '';
+    refreshGuestRecords();
   } catch (error) { token = ''; $('auth-error').textContent = error.message; }
   finally { $('auth-submit').disabled = false; }
 });
@@ -157,6 +161,7 @@ $('logout').addEventListener('click', async () => {
   finally {
     token = ''; config = undefined; nodes = []; nodeSignature = ''; $('node-list').replaceChildren();
     clearProviders();
+    clearGuestRecords();
     privacy.clear($('admin-url')); privacy.clear($('admin-key'));
     $('admin-content').hidden = true; $('logout').hidden = true;
     await load();
